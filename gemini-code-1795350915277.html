@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Club de Scrabble de Mme Laurence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,600;0,700;1,500&family=Nunito:wght@700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Lora', 'serif'],
+                    },
+                    colors: {
+                        creme: '#FAF7F0',
+                        lin: '#EDE5D5',
+                        linDark: '#DDD0BA',
+                        bois: '#6B4C35',
+                        boisDark: '#3D2E24',
+                        sauge: '#5E8360',
+                        saugeDark: '#446346',
+                        ocre: '#D9A441',
+                        terracotta: '#C86D51',
+                        ardoise: '#4F6D7A'
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        html, body {
+            height: 100vh;
+            overflow: hidden;
+            background-color: #F7F3EB;
+            background-image: radial-gradient(#D5C9B6 0.75px, transparent 0.75px), radial-gradient(#D5C9B6 0.75px, #F7F3EB 0.75px);
+            background-size: 28px 28px;
+            background-position: 0 0, 14px 14px;
+            color: #3D2E24;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .scrabble-board {
+            display: grid;
+            grid-template-columns: repeat(15, minmax(0, 1fr));
+            grid-template-rows: repeat(15, minmax(0, 1fr));
+            gap: 2px;
+            background-color: #6B4C35;
+            padding: 5px;
+            border-radius: 12px;
+            box-shadow: 0 10px 24px -6px rgba(79, 55, 37, 0.35), inset 0 2px 4px rgba(255,255,255,0.2);
+            aspect-ratio: 1 / 1;
+            height: min(calc(100vh - 196px), 580px, 100%);
+            width: auto;
+            max-width: min(95vw, 580px);
+            max-height: 100%;
+            margin: 0 auto;
+            user-select: none;
+        }
+
+        .board-cell {
+            position: relative;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Nunito', 'Varela Round', 'Arial Rounded MT Bold', ui-rounded, sans-serif;
+            font-size: clamp(0.54rem, 1.25vh, 0.82rem);
+            font-weight: 500;
+            text-align: center;
+            line-height: 1.05;
+            letter-spacing: -0.02em;
+            cursor: pointer;
+            transition: transform 0.1s ease, filter 0.12s ease;
+            overflow: visible;
+        }
+
+        .board-cell > span {
+            display: block;
+            max-width: 100%;
+            text-align: center;
+            line-height: 1.05;
+            word-break: keep-all;
+        }
+
+        .board-cell:hover { filter: brightness(1.06); }
+
+        .cell-normal { background-color: #EDE5D5; color: #8C7A6B; }
+        .cell-tw { background-color: #C86D51; color: #F7F3EB; }
+        .cell-dw { background-color: #D9A441; color: #3D2E24; }
+        .cell-tl { background-color: #4F6D7A; color: #F7F3EB; }
+        .cell-dl { background-color: #6B8E6B; color: #F7F3EB; }
+        .cell-star { background-color: #D9A441; color: #4F3725; font-size: clamp(0.88rem, 1.65vh, 1.25rem); }
+
+        .board-cell.has-tile.cell-tw { box-shadow: inset 0 0 0 2px #C86D51; }
+        .board-cell.has-tile.cell-dw,
+        .board-cell.has-tile.cell-star { box-shadow: inset 0 0 0 2px #D9A441; }
+        .board-cell.has-tile.cell-tl { box-shadow: inset 0 0 0 2px #4F6D7A; }
+        .board-cell.has-tile.cell-dl { box-shadow: inset 0 0 0 2px #6B8E6B; }
+
+        .board-cell.has-tile .wood-tile {
+            width: 94%;
+            height: 94%;
+        }
+
+        .wood-tile {
+            width: 92%;
+            height: 92%;
+            background: linear-gradient(145deg, #FBF2E0 0%, #F5E6C8 100%);
+            border: 1px solid #D4BC96;
+            border-bottom: 2.5px solid #B89B72;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            font-family: 'Lora', serif;
+            font-weight: 700;
+            color: #3D2E24;
+            box-shadow: 0 2px 3px rgba(61, 46, 36, 0.22);
+            cursor: grab;
+            z-index: 10;
+            transition: transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.14s ease;
+        }
+
+        .wood-tile:active { cursor: grabbing; }
+
+        .wood-tile.temp-placed {
+            background: linear-gradient(145deg, #FFF7E2 0%, #F4D89E 100%);
+            border-color: #D9A441;
+            border-bottom-color: #B38228;
+            box-shadow: 0 3px 8px rgba(217, 164, 65, 0.45);
+        }
+
+        .wood-tile.last-played-highlight {
+            box-shadow: 0 0 0 3px #CA8A04, 0 0 14px rgba(234, 179, 8, 0.85);
+            background: linear-gradient(145deg, #FEF9C3 0%, #FDE047 100%);
+            border-color: #CA8A04;
+            border-bottom-color: #854D0E;
+            color: #422006;
+            z-index: 15;
+        }
+
+        .wood-tile.last-played-highlight .tile-points { color: #713F12; }
+        .wood-tile.joker-tile { color: #C86D51; }
+
+        .wood-tile .tile-letter {
+            font-size: clamp(1.08rem, 2.25vh, 1.55rem);
+            line-height: 1;
+            transform: translate(-1px, -1px);
+        }
+
+        .tile-points {
+            position: absolute;
+            bottom: 1.5px;
+            right: 2.5px;
+            font-family: 'Inter', sans-serif;
+            font-size: clamp(0.46rem, 0.95vh, 0.66rem);
+            font-weight: 700;
+            color: #7C583D;
+            line-height: 1;
+        }
+
+        .rack-slot {
+            width: clamp(34px, 4.6vh, 46px);
+            height: clamp(38px, 5.1vh, 50px);
+            background: rgba(61, 46, 36, 0.28);
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+        }
+
+        .rack-tile {
+            width: 100%;
+            height: 100%;
+            border-radius: 6px;
+            border-bottom-width: 3px;
+        }
+
+        .rack-tile .tile-letter { font-size: clamp(1.05rem, 2.3vh, 1.45rem); }
+        .rack-tile .tile-points { font-size: clamp(0.52rem, 1vh, 0.68rem); bottom: 2px; right: 4px; }
+
+        .rack-tile.selected {
+            transform: translateY(-6px) scale(1.05);
+            box-shadow: 0 8px 14px rgba(217, 164, 65, 0.55);
+            border-color: #D9A441;
+        }
+
+        .wood-rack {
+            background: linear-gradient(180deg, #8B6548 0%, #6D4C33 85%, #543924 100%);
+            border-top: 2px solid #A88162;
+            border-bottom: 5px solid #452E1D;
+            box-shadow: 0 8px 16px rgba(61, 46, 36, 0.25);
+        }
+
+        @keyframes tileBounce {
+            0% { transform: scale(1.3) translateY(-8px); }
+            60% { transform: scale(0.94) translateY(1px); }
+            100% { transform: scale(1) translateY(0); }
+        }
+        .animate-tile-drop { animation: tileBounce 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #EDE5D5; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #B8A693; border-radius: 10px; }
+    </style>
+</head>
+<body class="h-screen overflow-hidden flex flex-col">
+
+    <!-- EN-TÊTE COMPACT -->
+    <header class="bg-creme/95 backdrop-blur-md border-b border-linDark shadow-sm shrink-0 z-30">
+        <div class="max-w-[1440px] mx-auto px-3 sm:px-5 py-1.5 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5 min-w-0">
+                <div id="header-emblem" class="w-9 h-9 rounded-xl bg-lin border border-ocre/70 flex items-center justify-center shadow-sm overflow-hidden shrink-0"></div>
+                <div class="truncate">
+                    <h1 class="font-serif text-base sm:text-lg font-bold text-boisDark leading-tight truncate">
+                        Club de Scrabble de Mme Laurence
+                    </h1>
+                    <p class="text-[11px] text-saugeDark font-medium hidden md:block leading-none">
+                        Club de lettres • Validation officielle Dictionnaire ODS
+                    </p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-1.5 shrink-0">
+                <button onclick="openLobbyModal()" class="px-2.5 py-1.5 rounded-xl bg-ardoise hover:opacity-95 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1">
+                    <span>🏠</span>
+                    <span class="hidden sm:inline">Salons privés</span>
+                </button>
+                <button onclick="openSetupModal()" class="px-2.5 py-1.5 rounded-xl bg-sauge hover:bg-saugeDark text-white text-xs font-semibold shadow-sm transition flex items-center gap-1">
+                    <span>🎲</span>
+                    <span>Nouvelle partie</span>
+                </button>
+                <button onclick="openRecentGamesModal()" class="px-2.5 py-1.5 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/20 text-xs font-semibold transition flex items-center gap-1">
+                    <span>📋</span>
+                    <span class="hidden sm:inline">Parties récentes</span>
+                </button>
+                <button onclick="openAccountModal()" id="account-btn" class="px-2.5 py-1.5 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/20 text-xs font-semibold transition flex items-center gap-1">
+                    <span id="account-avatar-mini" class="w-4 h-4 rounded-full overflow-hidden inline-flex items-center justify-center">👤</span>
+                    <span id="account-label" class="max-w-[95px] truncate hidden sm:inline">Membre</span>
+                </button>
+                <button onclick="openAdminTabFromHeader()" id="admin-header-btn" class="hidden px-2.5 py-1.5 rounded-xl bg-ocre hover:opacity-95 text-boisDark border border-bois/25 text-xs font-bold shadow-sm transition flex items-center gap-1">
+                    <span>🛡️</span>
+                    <span class="hidden sm:inline">Tableau de bord</span>
+                </button>
+                <button onclick="toggleSound()" id="sound-btn" title="Activer/Couper les sons de bois" class="p-1.5 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/20 transition text-xs">
+                    <span id="sound-icon">🔊</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full px-3"></div>
+
+    <!-- CONTENU PRINCIPAL EN 3 COLONNES (FIXE SANS DÉFILEMENT) -->
+    <main class="flex-1 min-h-0 max-w-[1440px] w-full mx-auto px-3 sm:px-5 py-2 grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch overflow-hidden">
+
+        <!-- COLONNE GAUCHE : SCORES, DICTIONNAIRE ODS, RÉCENTES PARTIES & JOUEURS EN DIRECT -->
+        <aside class="hidden lg:flex lg:col-span-3 flex-col gap-2.5 min-h-0 overflow-hidden">
+            
+            <!-- Tableau des scores & Sac -->
+            <section class="bg-creme/95 rounded-2xl p-3 border border-linDark shadow-sm shrink-0">
+                <div class="flex items-center justify-between mb-2">
+                    <h2 class="font-serif font-bold text-boisDark text-sm flex items-center gap-1.5">
+                        <span>🏆</span> Scores
+                    </h2>
+                    <div class="px-2 py-0.5 rounded-full bg-lin border border-bois/20 text-[11px] font-bold text-bois flex items-center gap-1" title="102 tuiles au total">
+                        <span>🎒</span>
+                        <span>Sac : <span id="bag-count" class="text-terracotta">88</span>/102</span>
+                    </div>
+                </div>
+                <div id="scoreboard-list" class="flex flex-col gap-1.5"></div>
+            </section>
+
+            <!-- Bouton Comment jouer au Scrabble -->
+            <button type="button" onclick="openHowToPlayModal()" class="w-full py-2 px-3 rounded-2xl bg-ocre/20 hover:bg-ocre/30 text-boisDark border border-ocre/70 shadow-sm transition flex items-center justify-center gap-2 font-serif font-bold text-xs sm:text-sm shrink-0">
+                <span>📘</span>
+                <span>Comment jouer au Scrabble</span>
+            </button>
+
+            <!-- Vérificateur rapide Dictionnaire ODS -->
+            <section class="bg-creme/95 rounded-2xl p-3 border border-linDark shadow-sm shrink-0">
+                <div class="flex items-center justify-between mb-1.5">
+                    <h2 class="font-serif font-bold text-boisDark text-sm flex items-center gap-1.5">
+                        <span>📖</span> Vérificateur ODS
+                    </h2>
+                    <a href="https://www.ffscrabble.fr/verificateur-de-mots/" target="_blank" rel="noopener noreferrer" class="px-1.5 py-0.5 rounded bg-sauge/15 hover:bg-sauge/25 text-saugeDark text-[10px] font-bold transition">ffscrabble.fr ↗</a>
+                </div>
+                <div class="flex gap-1.5">
+                    <input type="text" id="dict-input" placeholder="Vérifier un mot ODS..." class="w-full px-2.5 py-1.5 rounded-xl bg-white border border-linDark text-xs uppercase font-semibold focus:outline-none focus:border-sauge" onkeydown="if(event.key==='Enter') checkDictionaryWord()">
+                    <button onclick="checkDictionaryWord()" id="btn-dict-check" class="px-2.5 py-1.5 rounded-xl bg-ardoise hover:opacity-90 text-white text-xs font-bold transition shrink-0">
+                        Tester
+                    </button>
+                </div>
+                <div id="dict-result" class="mt-1.5 text-[11px] font-semibold min-h-[16px] leading-tight"></div>
+            </section>
+
+            <!-- Tableau des récentes parties -->
+            <section class="bg-creme/95 rounded-2xl p-3 border border-linDark shadow-sm flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div class="flex items-center justify-between mb-1.5 shrink-0">
+                    <h2 class="font-serif font-bold text-boisDark text-sm flex items-center gap-1.5">
+                        <span>📋</span> Parties récentes
+                    </h2>
+                    <button onclick="openRecentGamesModal()" class="text-[11px] font-bold text-saugeDark hover:underline">
+                        Tout voir
+                    </button>
+                </div>
+                <div id="sidebar-recent-games" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs"></div>
+            </section>
+
+            <!-- Joueurs connectés en direct -->
+            <section class="bg-creme/95 rounded-2xl p-3 border border-linDark shadow-sm max-h-[34%] min-h-[125px] flex flex-col overflow-hidden shrink-0">
+                <div class="flex items-center justify-between mb-1.5 shrink-0">
+                    <h2 class="font-serif font-bold text-boisDark text-sm flex items-center gap-1.5 min-w-0">
+                        <span class="w-2.5 h-2.5 rounded-full bg-sauge animate-pulse shrink-0"></span>
+                        <span class="truncate">Joueurs connectés en direct</span>
+                    </h2>
+                    <span id="online-players-count" class="px-2 py-0.5 rounded-full bg-sauge/15 text-saugeDark text-[10px] font-bold shrink-0">
+                        1 en ligne
+                    </span>
+                </div>
+                <div id="online-players-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs"></div>
+            </section>
+        </aside>
+
+        <!-- COLONNE CENTRALE : BANDEAU, PLATEAU 15x15 & CHEVALET -->
+        <section class="lg:col-span-6 flex flex-col items-center justify-between min-h-0 py-0.5 overflow-hidden">
+            
+            <!-- Bandeau d'état du tour -->
+            <div class="w-full max-w-[630px] bg-creme/95 rounded-xl px-3 py-1.5 border border-linDark shadow-sm flex items-center justify-between gap-2 shrink-0">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span id="turn-indicator-dot" class="w-2.5 h-2.5 rounded-full bg-sauge animate-pulse shrink-0"></span>
+                    <span id="turn-status-text" class="font-serif font-bold text-xs sm:text-sm text-boisDark truncate">
+                        À vous de jouer
+                    </span>
+                </div>
+                <div id="live-score-preview" class="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-lin text-boisDark shrink-0">
+                    Posez vos tuiles sur ★
+                </div>
+            </div>
+
+            <!-- PLATEAU DE JEU 15x15 -->
+            <div class="flex-1 flex items-center justify-center min-h-0 w-full my-1">
+                <div id="scrabble-board" class="scrabble-board"></div>
+            </div>
+
+            <!-- CHEVALET EN BOIS & BOUTONS COMPACTS -->
+            <div class="w-full max-w-[520px] flex flex-col items-center gap-1.5 shrink-0">
+                <div class="wood-rack w-full px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2" id="player-rack"></div>
+
+                <div class="w-full grid grid-cols-4 gap-1.5">
+                    <button onclick="shuffleRack()" class="py-1.5 px-2 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/25 font-semibold text-xs shadow-sm transition flex items-center justify-center gap-1 active:scale-95">
+                        <span>🔀</span> <span>Mélanger</span>
+                    </button>
+                    <button onclick="recallTiles()" class="py-1.5 px-2 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/25 font-semibold text-xs shadow-sm transition flex items-center justify-center gap-1 active:scale-95">
+                        <span>↩️</span> <span>Rappeler</span>
+                    </button>
+                    <button onclick="openExchangeModal()" class="py-1.5 px-2 rounded-xl bg-ardoise hover:opacity-95 text-white font-semibold text-xs shadow-sm transition flex items-center justify-center gap-1 active:scale-95">
+                        <span>🔄</span> <span>Échanger</span>
+                    </button>
+                    <button onclick="submitMove()" id="btn-submit-move" class="py-1.5 px-2 rounded-xl bg-sauge hover:bg-saugeDark text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-1 active:scale-95">
+                        <span>✅</span> <span>Valider</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- COLONNE DROITE : PORTRAIT COMPAGNON & JOURNAL -->
+        <aside class="hidden lg:flex lg:col-span-3 flex-col gap-2.5 min-h-0 overflow-hidden">
+            
+            <!-- Portrait & Bulle de réaction -->
+            <section class="bg-creme/95 rounded-2xl p-3 border border-linDark shadow-sm shrink-0">
+                <div class="flex items-center gap-2.5 mb-2">
+                    <div class="relative shrink-0">
+                        <div id="mascot-portrait" class="w-14 h-14 rounded-2xl bg-white border-2 border-ocre/80 flex items-center justify-center shadow-inner overflow-hidden"></div>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <span id="mascot-badge" class="inline-block max-w-full truncate whitespace-nowrap px-2 py-0.5 rounded-full bg-sauge/20 text-saugeDark text-[10px] font-bold uppercase tracking-tight">
+                            Vérificateur ODS
+                        </span>
+                        <h3 id="mascot-name" class="font-serif font-bold text-boisDark text-sm leading-tight truncate">
+                            Mme Laurence
+                        </h3>
+                        <p id="mascot-subtitle" class="text-[11px] text-bois/75 truncate">
+                            Fondatrice du Club
+                        </p>
+                    </div>
+                </div>
+
+                <div class="relative bg-lin/85 border border-linDark rounded-xl p-2.5 text-xs text-boisDark italic leading-snug">
+                    <p id="mascot-quote">
+                        « Bienvenue au salon ! Posez vos lettres sur le plateau puis cliquez sur Valider. »
+                    </p>
+                </div>
+            </section>
+
+            <!-- Journal des coups -->
+            <section class="bg-creme/95 rounded-2xl p-3 border border-linDark shadow-sm flex-1 min-h-0 flex flex-col overflow-hidden">
+                <h2 class="font-serif font-bold text-boisDark text-sm mb-1.5 flex items-center justify-between shrink-0">
+                    <span class="flex items-center gap-1.5"><span>📜</span> Journal de partie</span>
+                    <span id="turn-counter-badge" class="text-[11px] font-sans font-semibold text-bois/70">Tour 1</span>
+                </h2>
+                <div id="move-history" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs"></div>
+            </section>
+        </aside>
+    </main>
+
+    <!-- ===================================================================== -->
+    <!-- MODALE 0 : ÉCRAN DE BIENVENUE À L'OUVERTURE DU JEU                    -->
+    <!-- ===================================================================== -->
+    <div id="welcome-modal" class="fixed inset-0 z-50 bg-boisDark/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+        <div class="bg-creme rounded-3xl max-w-3xl w-full p-5 sm:p-6 border-2 border-ocre shadow-2xl flex flex-col my-auto">
+            <div class="flex flex-col sm:flex-row items-center gap-5 mb-4">
+                <div class="shrink-0 flex flex-col items-center">
+                    <div id="welcome-club-photo" class="w-32 h-32 sm:w-40 sm:h-40 rounded-3xl bg-white border-4 border-ocre shadow-lg overflow-hidden"></div>
+                    <span class="mt-2 px-3 py-0.5 rounded-full bg-sauge/15 text-saugeDark text-[11px] font-bold">
+                        Club de lettres • ODS
+                    </span>
+                </div>
+
+                <div class="flex-1 min-w-0 text-center sm:text-left space-y-3">
+                    <div>
+                        <h2 class="font-serif text-xl sm:text-2xl font-bold text-boisDark leading-snug">
+                            Bienvenue au Club de Scrabble de Mme Laurence !
+                        </h2>
+                        <p class="text-xs sm:text-sm text-bois/85 mt-1">
+                            Un club de lettres convivial pour jouer seul, entre amis ou dans un salon de 2 à 4 joueurs.
+                        </p>
+                    </div>
+
+                    <!-- Connexion Membre ou Mode Invité -->
+                    <div class="bg-gradient-to-r from-ardoise/15 via-sauge/15 to-ocre/15 rounded-2xl p-3.5 border border-ardoise/40 shadow-sm">
+                        <div id="welcome-member-guest-banner" class="flex flex-col sm:flex-row items-center justify-between gap-2.5">
+                            <div class="text-center sm:text-left">
+                                <h3 class="font-serif font-bold text-sm text-boisDark">👤 Espace Membre</h3>
+                                <p class="text-[11px] text-bois/85">Connectez-vous ou créez un profil pour choisir votre table.</p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto">
+                                <button type="button" onclick="openAccountFromWelcome('login')" class="flex-1 sm:flex-initial py-2 px-3.5 rounded-xl bg-ardoise hover:opacity-95 text-white text-xs font-bold shadow transition">
+                                    Se connecter
+                                </button>
+                                <button type="button" onclick="openAccountFromWelcome('register')" class="flex-1 sm:flex-initial py-2 px-3.5 rounded-xl bg-white hover:bg-lin text-boisDark border border-ardoise/40 text-xs font-bold transition">
+                                    Créer un profil
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="welcome-member-connected-banner" class="hidden space-y-2.5">
+                            <div class="flex flex-col sm:flex-row items-center justify-between gap-2">
+                                <div class="flex items-center gap-2.5">
+                                    <div id="welcome-connected-avatar" class="w-10 h-10 rounded-xl bg-white border-2 border-sauge overflow-hidden shadow shrink-0"></div>
+                                    <div class="text-left">
+                                        <h3 id="welcome-connected-name" class="font-serif font-bold text-sm text-boisDark leading-tight"></h3>
+                                        <p id="welcome-connected-saves-count" class="text-[11px] text-saugeDark font-semibold">Membre connecté • Synchronisé dans le nuage</p>
+                                    </div>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-1.5 shrink-0">
+                                    <button type="button" id="welcome-admin-tab-btn" onclick="openAdminTabFromWelcome()" class="hidden py-1.5 px-2.5 rounded-xl bg-ocre hover:opacity-95 text-boisDark border border-bois/25 text-[11px] font-bold shadow-sm transition">
+                                        🛡️ Tableau de bord
+                                    </button>
+                                    <button type="button" onclick="closeModal('welcome-modal'); openSaveModal();" class="py-1.5 px-2.5 rounded-xl bg-white hover:bg-lin text-boisDark border border-sauge/40 text-[11px] font-bold transition">
+                                        💾 Mes parties
+                                    </button>
+                                    <button type="button" onclick="logoutMember()" class="py-1.5 px-2.5 rounded-xl bg-white hover:bg-lin text-terracotta border border-terracotta/30 text-[11px] font-bold transition">
+                                        Déconnexion
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Choix direct des 3 modes de jeu -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-3.5">
+                <button type="button" onclick="closeModal('welcome-modal'); openLobbyModal();" class="group text-left p-3 rounded-2xl bg-white hover:bg-ardoise/10 border-2 border-ardoise/60 hover:border-ardoise shadow-sm transition flex items-center gap-2.5">
+                    <span class="w-9 h-9 rounded-xl bg-ardoise/15 text-lg flex items-center justify-center shrink-0">🏠</span>
+                    <div>
+                        <p class="font-serif font-bold text-xs sm:text-sm text-boisDark group-hover:text-ardoise">Créer ou rejoindre un salon</p>
+                        <p class="text-[11px] text-bois/80 leading-snug">Ouvrez ou rejoignez une table de 2 à 4 joueurs.</p>
+                    </div>
+                </button>
+                <button type="button" onclick="chooseWelcomeMode('solo')" class="group text-left p-3 rounded-2xl bg-white hover:bg-sauge/10 border-2 border-sauge/60 hover:border-sauge shadow-sm transition flex items-center gap-2.5">
+                    <span class="w-9 h-9 rounded-xl bg-sauge/15 text-lg flex items-center justify-center shrink-0">🐾</span>
+                    <div>
+                        <p class="font-serif font-bold text-xs sm:text-sm text-boisDark group-hover:text-saugeDark">Contre un compagnon</p>
+                        <p class="text-[11px] text-bois/80 leading-snug">Affrontez l'un des quatre compagnons du club.</p>
+                    </div>
+                </button>
+                <button type="button" onclick="chooseWelcomeMode('local')" class="group text-left p-3 rounded-2xl bg-white hover:bg-ocre/15 border-2 border-ocre/60 hover:border-ocre shadow-sm transition flex items-center gap-2.5">
+                    <span class="w-9 h-9 rounded-xl bg-ocre/20 text-lg flex items-center justify-center shrink-0">🎲</span>
+                    <div>
+                        <p class="font-serif font-bold text-xs sm:text-sm text-boisDark">Jouer en local (4 compagnons)</p>
+                        <p class="text-[11px] text-bois/80 leading-snug">4 compagnons sur la même page autour du même ordinateur.</p>
+                    </div>
+                </button>
+            </div>
+
+            <!-- Barre d'actions secondaire -->
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-linDark">
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" onclick="openAdminFromWelcome()" class="py-2 px-3 rounded-xl bg-ocre hover:opacity-95 text-boisDark border border-bois/25 text-xs font-bold shadow-sm transition">
+                        🛡️ Espace Admin
+                    </button>
+                    <button type="button" onclick="closeModal('welcome-modal'); openRecentGamesModal();" class="py-2 px-3 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/20 text-xs font-bold transition">
+                        📋 Parties récentes
+                    </button>
+                </div>
+                <button type="button" id="welcome-guest-play-btn" onclick="playAsGuestFromWelcome()" class="py-2 px-4 rounded-xl bg-sauge hover:bg-saugeDark text-white text-xs font-bold shadow-md transition">
+                    Jouer en mode invité →
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- MODALE 1 : ESPACE MEMBRE & ESPACE ADMIN (AVEC ONGLET TABLEAU DE BORD) -->
+    <!-- ===================================================================== -->
+    <div id="account-modal" class="hidden fixed inset-0 z-50 bg-boisDark/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+        <div class="bg-creme rounded-3xl max-w-2xl w-full p-5 sm:p-6 border-2 border-ardoise shadow-2xl my-auto">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="backToWelcomeFromModal('account-modal')" class="px-2.5 py-1.5 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/20 text-xs font-bold transition">
+                        ← Précédent
+                    </button>
+                    <h2 id="account-modal-title" class="font-serif text-lg sm:text-xl font-bold text-boisDark">👤 Espace Membre du Club</h2>
+                </div>
+                <button type="button" onclick="closeModal('account-modal')" class="w-8 h-8 rounded-full bg-lin hover:bg-linDark flex items-center justify-center font-bold text-boisDark">✕</button>
+            </div>
+
+            <!-- Vue profil déjà connecté -->
+            <div id="account-connected-view" class="hidden space-y-4">
+                <div id="admin-connected-tabs" class="hidden grid grid-cols-2 gap-2 p-1 bg-lin rounded-2xl border border-linDark">
+                    <button type="button" id="connected-tab-profile-btn" onclick="switchConnectedSubTab('profile')" class="py-2 rounded-xl font-bold text-xs transition bg-white text-boisDark shadow-sm">
+                        👤 Mon profil Admin
+                    </button>
+                    <button type="button" id="connected-tab-dashboard-btn" onclick="switchConnectedSubTab('dashboard')" class="py-2 rounded-xl font-bold text-xs transition text-bois/75 hover:text-boisDark">
+                        🛡️ Tableau de bord
+                    </button>
+                </div>
+
+                <div id="connected-profile-panel" class="space-y-4">
+                    <div class="bg-white rounded-2xl p-4 border-2 border-sauge/40 flex items-center gap-3.5">
+                        <div id="account-profile-avatar" class="w-16 h-16 rounded-2xl bg-lin border-2 border-sauge overflow-hidden shrink-0"></div>
+                        <div class="min-w-0 flex-1">
+                            <span id="account-profile-badge" class="px-2 py-0.5 rounded-full bg-sauge/15 text-saugeDark text-[10px] font-bold uppercase">Membre du Club</span>
+                            <h3 id="account-profile-username" class="font-serif font-bold text-lg text-boisDark truncate mt-0.5"></h3>
+                            <p id="account-profile-subtitle" class="text-[11px] text-bois/75">Votre compte et vos parties sont sauvegardés dans le nuage.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-2 pt-2">
+                        <button type="button" onclick="logoutMember()" class="py-2 px-4 rounded-xl bg-terracotta/15 hover:bg-terracotta/25 text-terracotta font-bold text-xs transition">
+                            Se déconnecter
+                        </button>
+                        <button type="button" onclick="backToWelcomeFromModal('account-modal')" class="py-2 px-5 rounded-xl bg-sauge hover:bg-saugeDark text-white font-bold text-xs shadow transition">
+                            Choisir une table ou jouer →
+                        </button>
+                    </div>
+                </div>
+
+                <div id="connected-dashboard-panel" class="hidden space-y-3">
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="bg-white p-2.5 rounded-2xl border border-linDark text-center">
+                            <p class="text-[10px] font-bold text-bois/70 uppercase">Parties actives</p>
+                            <p id="admin-stat-active-games" class="font-serif font-bold text-lg text-saugeDark">1</p>
+                        </div>
+                        <div class="bg-white p-2.5 rounded-2xl border border-linDark text-center">
+                            <p class="text-[10px] font-bold text-bois/70 uppercase">Membres inscrits</p>
+                            <p id="admin-stat-members" class="font-serif font-bold text-lg text-ardoise">0</p>
+                        </div>
+                        <div class="bg-white p-2.5 rounded-2xl border border-linDark text-center">
+                            <p class="text-[10px] font-bold text-bois/70 uppercase">Tuiles restantes</p>
+                            <p id="admin-stat-bag" class="font-serif font-bold text-lg text-terracotta">88</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl p-3.5 border border-linDark space-y-2">
+                        <div class="flex items-center justify-between">
+                            <h4 class="font-serif font-bold text-xs sm:text-sm text-boisDark">🎲 Parties en cours au Club</h4>
+                            <span class="px-2 py-0.5 rounded-full bg-sauge/15 text-saugeDark text-[10px] font-bold">En direct</span>
+                        </div>
+                        <div id="admin-active-games-list" class="max-h-48 overflow-y-auto space-y-2 text-xs"></div>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-2 pt-1">
+                        <button type="button" onclick="logoutMember()" class="py-2 px-4 rounded-xl bg-terracotta/15 hover:bg-terracotta/25 text-terracotta font-bold text-xs transition">
+                            Se déconnecter
+                        </button>
+                        <button type="button" onclick="backToWelcomeFromModal('account-modal')" class="py-2 px-5 rounded-xl bg-sauge hover:bg-saugeDark text-white font-bold text-xs shadow transition">
+                            Rejoindre / Démarrer une partie →
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vue connexion / inscription / admin -->
+            <div id="account-auth-view">
+                <div class="grid grid-cols-3 gap-1.5 p-1 bg-lin rounded-2xl mb-4">
+                    <button type="button" id="tab-login-btn" onclick="switchAccountTab('login')" class="py-2 rounded-xl font-bold text-xs transition bg-white text-boisDark shadow-sm">
+                        Se connecter
+                    </button>
+                    <button type="button" id="tab-register-btn" onclick="switchAccountTab('register')" class="py-2 rounded-xl font-bold text-xs transition text-bois/75 hover:text-boisDark">
+                        Créer un compte
+                    </button>
+                    <button type="button" id="tab-admin-btn" onclick="switchAccountTab('admin')" class="py-2 rounded-xl font-bold text-xs transition text-bois/75 hover:text-boisDark">
+                        🛡️ Admin
+                    </button>
+                </div>
+
+                <!-- FORMULAIRE CONNEXION MEMBRE -->
+                <div id="account-login-panel" class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-bold text-boisDark mb-1">Votre identifiant</label>
+                        <input type="text" id="login-username" placeholder="Ex : SuperPooky42" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-linDark text-sm font-semibold focus:outline-none focus:border-ardoise">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-boisDark mb-1">Mot de passe</label>
+                        <input type="password" id="login-password" placeholder="••••••••" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-linDark text-sm font-semibold focus:outline-none focus:border-ardoise" onkeydown="if(event.key==='Enter') handleLoginMember()">
+                    </div>
+                    <div id="login-error-msg" class="hidden text-xs font-bold text-terracotta bg-terracotta/10 px-3 py-2 rounded-xl"></div>
+
+                    <div class="flex items-center justify-between pt-1">
+                        <button type="button" onclick="toggleForgotPasswordPanel(true)" class="text-xs font-semibold text-ardoise hover:underline">
+                            Mot de passe oublié ?
+                        </button>
+                        <button type="button" id="btn-login-submit" onclick="handleLoginMember()" class="py-2.5 px-5 rounded-xl bg-ardoise hover:opacity-95 text-white font-bold text-xs shadow transition">
+                            Se connecter →
+                        </button>
+                    </div>
+
+                    <!-- Récupération par question secrète -->
+                    <div id="forgot-password-panel" class="hidden mt-3 p-3.5 rounded-2xl bg-lin/80 border border-linDark space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <h4 class="font-serif font-bold text-xs text-boisDark">Récupération via question secrète</h4>
+                            <button type="button" onclick="toggleForgotPasswordPanel(false)" class="text-xs font-bold text-bois/70">✕</button>
+                        </div>
+                        <div class="flex gap-1.5">
+                            <input type="text" id="recover-username" placeholder="Saisissez votre identifiant" class="flex-1 px-3 py-1.5 rounded-xl bg-white border border-linDark text-xs font-semibold">
+                            <button type="button" onclick="lookupSecretQuestion()" class="px-3 py-1.5 rounded-xl bg-bois text-white text-xs font-bold">Chercher</button>
+                        </div>
+                        <div id="recover-question-box" class="hidden space-y-2">
+                            <p id="recover-question-text" class="text-xs font-bold text-ardoise"></p>
+                            <input type="text" id="recover-answer" placeholder="Votre réponse secrète" class="w-full px-3 py-1.5 rounded-xl bg-white border border-linDark text-xs font-semibold">
+                            <input type="password" id="recover-new-password" placeholder="Nouveau mot de passe (4 caractères min.)" class="w-full px-3 py-1.5 rounded-xl bg-white border border-linDark text-xs font-semibold">
+                            <button type="button" onclick="resetPasswordWithSecret()" class="w-full py-2 rounded-xl bg-sauge text-white text-xs font-bold">Réinitialiser le mot de passe</button>
+                        </div>
+                        <div id="recover-feedback" class="hidden text-xs font-bold"></div>
+                    </div>
+                </div>
+
+                <!-- FORMULAIRE CONNEXION ADMINISTRATRICE (MME LAURENCE) -->
+                <div id="account-admin-panel" class="hidden space-y-3">
+                    <div class="bg-ocre/15 border border-ocre rounded-2xl p-3 flex items-center gap-3">
+                        <div id="admin-login-preview-avatar" class="w-12 h-12 rounded-xl bg-white border-2 border-ocre overflow-hidden shrink-0"></div>
+                        <div class="min-w-0">
+                            <p class="font-serif font-bold text-xs sm:text-sm text-boisDark">Accès Administrateur — Mme Laurence</p>
+                            <p class="text-[11px] text-bois/80">Gérez les parties en cours, consultez le tableau de bord et rejoignez les tables.</p>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-boisDark mb-1">Identifiant Administrateur</label>
+                        <input type="text" id="admin-login-username" placeholder="Identifiant administrateur" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-linDark text-sm font-semibold text-boisDark focus:outline-none focus:border-ocre">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-boisDark mb-1">Mot de passe Administrateur</label>
+                        <input type="password" id="admin-login-password" placeholder="••••••••" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-linDark text-sm font-semibold focus:outline-none focus:border-ocre" onkeydown="if(event.key==='Enter') handleLoginAdmin()">
+                    </div>
+                    <div id="admin-login-error-msg" class="hidden text-xs font-bold text-terracotta bg-terracotta/10 px-3 py-2 rounded-xl"></div>
+                    <div class="flex items-center justify-end pt-1">
+                        <button type="button" onclick="handleLoginAdmin()" class="py-2.5 px-5 rounded-xl bg-ocre hover:opacity-95 text-boisDark border border-bois/25 font-bold text-xs shadow transition">
+                            🛡️ Connexion Admin →
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ASSISTANT CRÉATION DE COMPTE EN 4 ÉTAPES -->
+                <div id="account-register-panel" class="hidden space-y-4">
+                    <div class="flex items-center justify-between gap-1.5 bg-lin/70 p-2 rounded-2xl border border-linDark">
+                        <div id="reg-step-pill-1" class="flex-1 py-1 px-2 rounded-xl text-center text-[11px] font-bold bg-sauge text-white">1. Avatar</div>
+                        <div id="reg-step-pill-2" class="flex-1 py-1 px-2 rounded-xl text-center text-[11px] font-bold text-bois/60">2. Identifiant</div>
+                        <div id="reg-step-pill-3" class="flex-1 py-1 px-2 rounded-xl text-center text-[11px] font-bold text-bois/60">3. Mot de passe</div>
+                        <div id="reg-step-pill-4" class="flex-1 py-1 px-2 rounded-xl text-center text-[11px] font-bold text-bois/60">4. Question</div>
+                    </div>
+
+                    <div id="register-step-1" class="space-y-3">
+                        <p class="font-serif font-bold text-sm text-boisDark">Étape 1 : Choisissez votre avatar parmi les compagnons du club :</p>
+                        <div id="register-avatar-grid" class="grid grid-cols-5 gap-2"></div>
+                        <p id="register-selected-avatar-label" class="text-xs font-bold text-saugeDark text-center"></p>
+                    </div>
+
+                    <div id="register-step-2" class="hidden space-y-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="font-serif font-bold text-sm text-boisDark">Étape 2 : Choisissez votre identifiant unique :</p>
+                            <button type="button" onclick="regenerateUsernameChoices()" class="px-2.5 py-1 rounded-xl bg-lin hover:bg-linDark text-boisDark border border-bois/20 text-[11px] font-bold transition shrink-0">
+                                🔄 Régénérer 3 autres choix
+                            </button>
+                        </div>
+                        <p class="text-[11px] text-bois/80">Cliquez sur l'une des 3 propositions générées automatiquement pour votre avatar :</p>
+                        <div id="register-username-options" class="grid grid-cols-1 sm:grid-cols-3 gap-2.5"></div>
+                    </div>
+
+                    <div id="register-step-3" class="hidden space-y-3">
+                        <p class="font-serif font-bold text-sm text-boisDark">Étape 3 : Définissez votre mot de passe :</p>
+                        <div class="bg-white/80 px-3 py-2 rounded-xl border border-linDark flex items-center gap-2 text-xs">
+                            <span>Compte choisi :</span>
+                            <strong id="reg-summary-username" class="text-ardoise"></strong>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-boisDark mb-1">Mot de passe (4 caractères minimum)</label>
+                            <input type="password" id="reg-password" placeholder="••••••••" class="w-full px-3.5 py-2 rounded-xl bg-white border border-linDark text-sm font-semibold focus:outline-none focus:border-sauge">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-boisDark mb-1">Confirmez le mot de passe</label>
+                            <input type="password" id="reg-password-confirm" placeholder="••••••••" class="w-full px-3.5 py-2 rounded-xl bg-white border border-linDark text-sm font-semibold focus:outline-none focus:border-sauge">
+                        </div>
+                    </div>
+
+                    <div id="register-step-4" class="hidden space-y-3">
+                        <p class="font-serif font-bold text-sm text-boisDark">Étape 4 : Question secrète ludique (récupération de compte) :</p>
+                        <div>
+                            <label class="block text-xs font-bold text-boisDark mb-1">Choisissez votre question secrète</label>
+                            <select id="reg-secret-question" class="w-full px-3 py-2.5 rounded-xl bg-white border border-linDark text-xs font-semibold text-boisDark focus:outline-none focus:border-sauge">
+                                <option value="Quel est ton animal préféré du club ?">1. Quel est ton animal préféré du club ?</option>
+                                <option value="Quel est ton super-pouvoir rêvé ?">2. Quel est ton super-pouvoir rêvé ?</
