@@ -3149,7 +3149,8 @@
         history: [],
         lastPlayedCoords: [],
         lastPlayedBy: null,
-        ownerKey: 'guest'
+        ownerKey: 'guest',
+        stateVersion: 0
     };
 
     let tempPlacements = [];
@@ -3157,6 +3158,8 @@
     let pendingJokerPlacement = null;
     let cloudRecentGamesCache = [];
     let bonusExplicationsCount = 0;
+    let activeRoomWatchCode = null;
+    let lastAppliedRoomStateVersion = -1;
 
     function normalizeMemberLoginKey(raw) {
         return String(raw || '')
@@ -4354,13 +4357,21 @@
             history: [],
             lastPlayedCoords: [],
             lastPlayedBy: null,
-            ownerKey: getCurrentUserKey()
+            ownerKey: getCurrentUserKey(),
+            stateVersion: config?.initialStateVersion || 1
         };
 
         tempPlacements = [];
         selectedRackIndex = null;
         pendingJokerPlacement = null;
         bonusExplicationsCount = 0;
+
+        if (mode === 'room' && gameState.roomCode) {
+            lastAppliedRoomStateVersion = gameState.stateVersion;
+            subscribeToActiveRoomGame(gameState.roomCode);
+        } else {
+            unsubscribeFromActiveRoomGame();
+        }
 
         renderBoard();
         renderRack();
@@ -4369,6 +4380,202 @@
         updateTurnUI();
         updateMascotQuoteForActivePlayer();
         recordRecentGameSnapshot();
+    }
+
+    function unsubscribeFromActiveRoomGame() {
+        if (window.ClubRealtimeSync && typeof window.ClubRealtimeSync.stopWatching === 'function') {
+            window.ClubRealtimeSync.stopWatching();
+        }
+        activeRoomWatchCode = null;
+        lastAppliedRoomStateVersion = -1;
+    }
+
+    function serializeGameStateForFirestoreRoom(state) {
+        return {
+            id: state.id,
+            startedAt: state.startedAt,
+            dateStr: state.dateStr,
+            title: state.title,
+            mode: 'room',
+            roomCode: state.roomCode,
+            roomName: state.roomName,
+            boardJson: JSON.stringify(state.board),
+            bag: Array.isArray(state.bag) ? state.bag.map(t => ({ letter: t.letter, points: t.points })) : [],
+            players: Array.isArray(state.players) ? state.players.map(p => ({
+                name: p.name,
+                avatar: p.avatar || 'pooky',
+                isAI: Boolean(p.isAI),
+                level: p.level || null,
+                peerId: p.peerId || null,
+                score: Number(p.score || 0),
+                rack: Array.isArray(p.rack) ? p.rack.map(t => ({ letter: t.letter, points: t.points })) : [],
+                wordsPlayedCount: Number(p.wordsPlayedCount || 0)
+            })) : [],
+            currentPlayerIndex: Number(state.currentPlayerIndex || 0),
+            currentTurn: Number(state.currentPlayerIndex || 0),
+            turnNumber: Number(state.turnNumber || 1),
+            consecutivePasses: Number(state.consecutivePasses || 0),
+            gameOver: Boolean(state.gameOver),
+            history: Array.isArray(state.history) ? state.history : [],
+            lastPlayedCoords: Array.isArray(state.lastPlayedCoords) ? state.lastPlayedCoords : [],
+            lastPlayedBy: state.lastPlayedBy || null,
+            ownerKey: state.ownerKey || 'guest',
+            stateVersion: Number(state.stateVersion || 1),
+            updatedAt: Date.now()
+        };
+    }
+
+    async function pushRoomGameStateToFirestore(reason = 'update') {
+        if (gameState.mode !== 'room' || !gameState.roomCode) return;
+        if (!window.ClubRealtimeSync || typeof window.ClubRealtimeSync.updateRoom !== 'function') return;
+
+        gameState.stateVersion = (Number(gameState.stateVersion) || 0) + 1;
+        lastAppliedRoomStateVersion = gameState.stateVersion;
+
+        const serialized = serializeGameStateForFirestoreRoom(gameState);
+        const currentTurnPlayer = gameState.players[gameState.currentPlayerIndex] || null;
+
+        try {
+            await window.ClubRealtimeSync.updateRoom(gameState.roomCode, {
+                status: gameState.gameOver ? 'finished' : 'started',
+                currentTurn: serialized.currentPlayerIndex,
+                currentPlayerIndex: serialized.currentPlayerIndex,
+                currentTurnPeerId: currentTurnPlayer?.peerId || null,
+                currentTurnName: currentTurnPlayer?.name || null,
+                turnNumber: serialized.turnNumber,
+                bag: serialized.bag,
+                players: serialized.players,
+                history: serialized.history,
+                lastPlayedCoords: serialized.lastPlayedCoords,
+                lastPlayedBy: serialized.lastPlayedBy,
+                gameOver: serialized.gameOver,
+                boardJson: serialized.boardJson,
+                liveGameState: serialized,
+                lastActionReason: reason,
+                stateVersion: serialized.stateVersion,
+                updatedAt: Date.now()
+            });
+        } catch (e) {}
+    }
+
+    function applyIncomingFirestoreRoomState(roomData) {
+        if (!roomData || gameState.mode !== 'room' || !gameState.roomCode) return;
+        if (String(roomData.roomCode || '').toUpperCase() !== String(gameState.roomCode || '').toUpperCase()) return;
+
+        const incomingState = roomData.liveGameState || null;
+        const incomingVersion = Number(incomingState?.stateVersion || roomData.stateVersion || 0);
+        if (incomingVersion <= 0 || incomingVersion <= lastAppliedRoomStateVersion) return;
+
+        lastAppliedRoomStateVersion = incomingVersion;
+
+        let parsedBoard = null;
+        const rawBoardJson = incomingState?.boardJson || roomData.boardJson;
+        if (typeof rawBoardJson === 'string') {
+            try {
+                parsedBoard = JSON.parse(rawBoardJson);
+            } catch (e) {}
+        }
+
+        const myPeerId = getCurrentUserKey();
+        const myNameNorm = normalizeMemberLoginKey(getCurrentUserDisplayName());
+        const existingMe = gameState.players.find(p =>
+            (p.peerId && p.peerId === myPeerId) ||
+            normalizeMemberLoginKey(p.name) === myNameNorm
+        );
+
+        const incomingPlayers = Array.isArray(incomingState?.players)
+            ? incomingState.players
+            : (Array.isArray(roomData.players) ? roomData.players : gameState.players);
+
+        const prevTurnIdx = gameState.currentPlayerIndex;
+        const prevHistoryLen = (gameState.history || []).length;
+
+        if (Array.isArray(parsedBoard) && parsedBoard.length === 15) {
+            gameState.board = parsedBoard;
+        }
+        if (Array.isArray(incomingState?.bag || roomData.bag)) {
+            gameState.bag = incomingState?.bag || roomData.bag;
+        }
+
+        gameState.players = incomingPlayers.map(p => {
+            const isLocalMe = (p.peerId && p.peerId === myPeerId) || normalizeMemberLoginKey(p.name) === myNameNorm;
+            if (isLocalMe && existingMe && tempPlacements.length > 0) {
+                return {
+                    ...p,
+                    rack: existingMe.rack
+                };
+            }
+            return p;
+        });
+
+        // Nettoyer d'éventuelles tuiles temporaires si une case vient d'être occupée par l'adversaire
+        if (tempPlacements.length > 0) {
+            tempPlacements = tempPlacements.filter(tp => !gameState.board[tp.r]?.[tp.c]);
+        }
+
+        const nextTurnIdx = typeof incomingState?.currentPlayerIndex === 'number'
+            ? incomingState.currentPlayerIndex
+            : (typeof roomData.currentTurn === 'number' ? roomData.currentTurn : gameState.currentPlayerIndex);
+
+        gameState.currentPlayerIndex = nextTurnIdx;
+        gameState.turnNumber = Number(incomingState?.turnNumber || roomData.turnNumber || gameState.turnNumber);
+        gameState.consecutivePasses = Number(incomingState?.consecutivePasses ?? gameState.consecutivePasses);
+        gameState.gameOver = Boolean(incomingState?.gameOver ?? roomData.gameOver);
+        gameState.history = Array.isArray(incomingState?.history || roomData.history) ? (incomingState?.history || roomData.history) : gameState.history;
+        gameState.lastPlayedCoords = Array.isArray(incomingState?.lastPlayedCoords || roomData.lastPlayedCoords) ? (incomingState?.lastPlayedCoords || roomData.lastPlayedCoords) : gameState.lastPlayedCoords;
+        gameState.lastPlayedBy = incomingState?.lastPlayedBy ?? roomData.lastPlayedBy ?? gameState.lastPlayedBy;
+        gameState.stateVersion = incomingVersion;
+
+        renderBoard();
+        renderRack();
+        renderScoreboard();
+        renderHistory();
+        updateTurnUI();
+        updateMascotQuoteForActivePlayer();
+        recordRecentGameSnapshot();
+
+        if ((gameState.history || []).length > prevHistoryLen) {
+            const latestMove = gameState.history[gameState.history.length - 1];
+            if (latestMove && latestMove.playerName && normalizeMemberLoginKey(latestMove.playerName) !== myNameNorm) {
+                if (Array.isArray(latestMove.words) && latestMove.words.length > 0) {
+                    showToast(`${latestMove.playerName} a joué ${latestMove.words.join(', ')} (+${latestMove.points} pts) !`, 'info');
+                } else if (latestMove.note) {
+                    showToast(latestMove.note, 'info');
+                }
+            }
+        } else if (prevTurnIdx !== nextTurnIdx && isLocalUserTurnInRoom()) {
+            showToast(`C'est à votre tour de jouer, ${getCurrentUserDisplayName()} !`, 'success');
+        }
+
+        if (gameState.gameOver) {
+            showGameSummaryModal('end_of_tiles');
+        }
+    }
+
+    function subscribeToActiveRoomGame(roomCode) {
+        const cleanCode = String(roomCode || '').trim().toUpperCase();
+        if (!cleanCode || !window.ClubRealtimeSync || typeof window.ClubRealtimeSync.watchRoom !== 'function') return;
+        activeRoomWatchCode = cleanCode;
+        window.ClubRealtimeSync.watchRoom(cleanCode, (roomData) => {
+            if (!roomData) return;
+            if (roomData.status === 'started' || roomData.status === 'finished') {
+                if (roomData.liveGameState) {
+                    applyIncomingFirestoreRoomState(roomData);
+                } else if (roomData.gameConfig && gameState.roomCode !== cleanCode) {
+                    initGame(roomData.gameConfig);
+                }
+            }
+        });
+    }
+
+    function isLocalUserTurnInRoom() {
+        if (gameState.mode !== 'room') return true;
+        const activePlayer = gameState.players[gameState.currentPlayerIndex];
+        if (!activePlayer) return false;
+        const myPeerId = getCurrentUserKey();
+        const myNameNorm = normalizeMemberLoginKey(getCurrentUserDisplayName());
+        if (activePlayer.peerId && myPeerId && activePlayer.peerId === myPeerId) return true;
+        return normalizeMemberLoginKey(activePlayer.name) === myNameNorm;
     }
 
     function updateMascotQuoteForActivePlayer() {
@@ -4458,8 +4665,12 @@
         if (gameState.mode === 'local') return current;
         if (gameState.mode === 'solo') return gameState.players[0];
         if (gameState.mode === 'room') {
-            const myName = getCurrentUserDisplayName();
-            return gameState.players.find(p => p.name === myName) || current;
+            const myPeerId = getCurrentUserKey();
+            const myNameNorm = normalizeMemberLoginKey(getCurrentUserDisplayName());
+            return gameState.players.find(p =>
+                (p.peerId && p.peerId === myPeerId) ||
+                normalizeMemberLoginKey(p.name) === myNameNorm
+            ) || current;
         }
         return current;
     }
@@ -4808,6 +5019,11 @@
             return;
         }
 
+        if (gameState.mode === 'room' && !isLocalUserTurnInRoom()) {
+            showToast(`Ce n’est pas encore votre tour : c’est à ${current.name} de jouer.`, 'error');
+            return;
+        }
+
         const evalRes = evaluatePlacements(tempPlacements);
         if (!evalRes.valid) {
             showToast(evalRes.reason, 'error');
@@ -4870,11 +5086,11 @@
             maybeShowBonusExplanationTutorial(moveSnapshotForTutorial, evalRes);
 
             if (current.rack.length === 0 && gameState.bag.length === 0) {
-                finishGame('end_of_tiles');
+                await finishGame('end_of_tiles');
                 return;
             }
 
-            advanceTurn();
+            await advanceTurn();
         } finally {
             if (submitBtn) submitBtn.disabled = false;
         }
@@ -5147,7 +5363,7 @@
         triggerProgressiveTierCelebration(points, isScrabble);
     }
 
-    function advanceTurn() {
+    async function advanceTurn() {
         gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
         gameState.turnNumber++;
         renderBoard();
@@ -5158,16 +5374,23 @@
         updateMascotQuoteForActivePlayer();
         recordRecentGameSnapshot();
 
+        if (gameState.mode === 'room' && gameState.roomCode) {
+            await pushRoomGameStateToFirestore('turn_advance');
+        }
+
         const nextPlayer = gameState.players[gameState.currentPlayerIndex];
         if (!gameState.gameOver && nextPlayer && nextPlayer.isAI) {
-            setTimeout(() => playCompanionAITurn(), 850);
+            const canTriggerAI = gameState.mode !== 'room' || isLocalUserTurnInRoom() || gameState.players[0]?.peerId === getCurrentUserKey();
+            if (canTriggerAI) {
+                setTimeout(() => playCompanionAITurn(), 850);
+            }
         }
     }
 
     // =========================================================================
     // INTELLIGENCE ARTIFICIELLE DES COMPAGNONS (SUR LE LEXIQUE LOCAL DU CLUB)
     // =========================================================================
-    function playCompanionAITurn() {
+    async function playCompanionAITurn() {
         if (gameState.gameOver) return;
         const aiPlayer = gameState.players[gameState.currentPlayerIndex];
         if (!aiPlayer || !aiPlayer.isAI) return;
@@ -5286,10 +5509,10 @@
             });
             playWoodSound(520, 0.1);
             if (aiPlayer.rack.length === 0 && gameState.bag.length === 0) {
-                finishGame('end_of_tiles');
+                await finishGame('end_of_tiles');
                 return;
             }
-            advanceTurn();
+            await advanceTurn();
         } else {
             if (gameState.bag.length >= 2 && aiPlayer.rack.length > 0) {
                 const count = Math.min(3, aiPlayer.rack.length, gameState.bag.length);
@@ -5314,10 +5537,10 @@
             }
             gameState.consecutivePasses++;
             if (gameState.consecutivePasses >= gameState.players.length * 2) {
-                finishGame('consecutive_passes');
+                await finishGame('consecutive_passes');
                 return;
             }
-            advanceTurn();
+            await advanceTurn();
         }
     }
 
@@ -5328,6 +5551,11 @@
 
     window.openExchangeModal = function() {
         if (gameState.gameOver) return;
+        if (gameState.mode === 'room' && !isLocalUserTurnInRoom()) {
+            const active = gameState.players[gameState.currentPlayerIndex];
+            showToast(`Patientez : c’est au tour de ${active?.name || 'votre adversaire'}.`, 'error');
+            return;
+        }
         recallTiles();
         selectedExchangeIndices = new Set();
         const player = getActiveHumanPlayer();
@@ -5355,9 +5583,14 @@
         }
     };
 
-    window.confirmExchangeTiles = function() {
+    window.confirmExchangeTiles = async function() {
         closeModal('exchange-modal');
         if (gameState.gameOver) return;
+        if (gameState.mode === 'room' && !isLocalUserTurnInRoom()) {
+            const active = gameState.players[gameState.currentPlayerIndex];
+            showToast(`Ce n’est pas votre tour : c’est à ${active?.name || 'votre adversaire'} de jouer.`, 'error');
+            return;
+        }
         const player = getActiveHumanPlayer();
         if (!player) return;
 
@@ -5371,10 +5604,10 @@
                 note: `⏭️ ${player.name} passe son tour.`
             });
             if (gameState.consecutivePasses >= gameState.players.length * 2) {
-                finishGame('consecutive_passes');
+                await finishGame('consecutive_passes');
                 return;
             }
-            advanceTurn();
+            await advanceTurn();
             return;
         }
 
@@ -5407,7 +5640,7 @@
             note: `🔄 ${player.name} a échangé ${returned.length} tuile(s).`
         });
         playWoodSound(420, 0.1);
-        advanceTurn();
+        await advanceTurn();
     };
 
     window.openForfeitConfirmModal = function() {
@@ -5418,12 +5651,12 @@
         openModal('forfeit-confirm-modal');
     };
 
-    window.confirmForfeitGame = function() {
+    window.confirmForfeitGame = async function() {
         closeModal('forfeit-confirm-modal');
-        finishGame('forfeit');
+        await finishGame('forfeit');
     };
 
-    function finishGame(reason) {
+    async function finishGame(reason) {
         gameState.gameOver = true;
         renderBoard();
         renderRack();
@@ -5431,6 +5664,9 @@
         renderHistory();
         updateTurnUI();
         recordRecentGameSnapshot();
+        if (gameState.mode === 'room' && gameState.roomCode) {
+            await pushRoomGameStateToFirestore('game_over_' + reason);
+        }
         showGameSummaryModal(reason);
     }
 
@@ -5577,16 +5813,40 @@
     function updateTurnUI() {
         const statusEl = document.getElementById('turn-status-text');
         const dotEl = document.getElementById('turn-indicator-dot');
+        const submitBtn = document.getElementById('btn-submit-move');
         if (!statusEl) return;
 
         if (gameState.gameOver) {
             statusEl.textContent = 'Partie terminée';
             if (dotEl) dotEl.className = 'w-2.5 h-2.5 rounded-full bg-terracotta shrink-0';
+            if (submitBtn) submitBtn.disabled = true;
             return;
         }
 
         const current = gameState.players[gameState.currentPlayerIndex];
         if (!current) return;
+
+        if (gameState.mode === 'room') {
+            const myTurn = isLocalUserTurnInRoom();
+            if (submitBtn) {
+                submitBtn.disabled = !myTurn;
+                submitBtn.classList.toggle('opacity-50', !myTurn);
+                submitBtn.classList.toggle('cursor-not-allowed', !myTurn);
+            }
+            if (myTurn) {
+                statusEl.textContent = `À vous de jouer, ${current.name}`;
+                if (dotEl) dotEl.className = 'w-2.5 h-2.5 rounded-full bg-sauge animate-pulse shrink-0';
+            } else {
+                statusEl.textContent = `Tour de ${current.name} (en attente...)`;
+                if (dotEl) dotEl.className = 'w-2.5 h-2.5 rounded-full bg-ocre animate-pulse shrink-0';
+            }
+            return;
+        }
+
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
 
         if (current.isAI) {
             statusEl.textContent = `${current.name} réfléchit...`;
@@ -6508,8 +6768,14 @@
                 activeWaitingRoom = updated;
                 renderActiveWaitingRoom();
                 if (updated.status === 'started' && updated.gameConfig) {
+                    const startedRoom = updated;
+                    activeWaitingRoom = null;
+                    renderActiveWaitingRoom();
                     closeModal('lobby-modal');
-                    initGame(updated.gameConfig);
+                    initGame(startedRoom.gameConfig);
+                    if (startedRoom.liveGameState) {
+                        applyIncomingFirestoreRoomState(startedRoom);
+                    }
                 }
             }
         }
@@ -6707,11 +6973,21 @@
         renderActiveWaitingRoom();
         if (window.ClubRealtimeSync && typeof window.ClubRealtimeSync.watchRoom === 'function') {
             window.ClubRealtimeSync.watchRoom(code, (roomData) => {
-                activeWaitingRoom = roomData;
-                renderActiveWaitingRoom();
-                if (roomData.status === 'started' && roomData.gameConfig) {
-                    closeModal('lobby-modal');
-                    initGame(roomData.gameConfig);
+                if (roomData.status === 'waiting') {
+                    activeWaitingRoom = roomData;
+                    renderActiveWaitingRoom();
+                } else if (roomData.status === 'started' || roomData.status === 'finished') {
+                    if (activeWaitingRoom && activeWaitingRoom.roomCode === code) {
+                        activeWaitingRoom = null;
+                        renderActiveWaitingRoom();
+                        closeModal('lobby-modal');
+                        if (roomData.gameConfig) {
+                            initGame(roomData.gameConfig);
+                        }
+                    }
+                    if (roomData.liveGameState) {
+                        applyIncomingFirestoreRoomState(roomData);
+                    }
                 }
             });
         }
@@ -6818,6 +7094,30 @@
         renderActiveWaitingRoom();
         closeModal('lobby-modal');
         initGame(gameConfig);
+
+        const initialSerialized = serializeGameStateForFirestoreRoom(gameState);
+        if (window.ClubRealtimeSync && gameConfig.roomCode) {
+            await window.ClubRealtimeSync.updateRoom(gameConfig.roomCode, {
+                status: 'started',
+                players: initialSerialized.players,
+                currentTurn: 0,
+                currentPlayerIndex: 0,
+                currentTurnPeerId: initialSerialized.players[0]?.peerId || null,
+                currentTurnName: initialSerialized.players[0]?.name || null,
+                turnNumber: 1,
+                bag: initialSerialized.bag,
+                history: [],
+                lastPlayedCoords: [],
+                lastPlayedBy: null,
+                gameOver: false,
+                boardJson: initialSerialized.boardJson,
+                liveGameState: initialSerialized,
+                stateVersion: initialSerialized.stateVersion,
+                gameConfig,
+                updatedAt: Date.now()
+            }).catch(() => {});
+        }
+
         showToast('La partie du salon démarre !', 'success');
     };
 
@@ -6879,11 +7179,21 @@
         if (window.ClubRealtimeSync) {
             await window.ClubRealtimeSync.saveRoom(roomCode, roomData);
             window.ClubRealtimeSync.watchRoom(roomCode, (updated) => {
-                activeWaitingRoom = updated;
-                renderActiveWaitingRoom();
-                if (updated.status === 'started' && updated.gameConfig) {
-                    closeModal('lobby-modal');
-                    initGame(updated.gameConfig);
+                if (updated.status === 'waiting') {
+                    activeWaitingRoom = updated;
+                    renderActiveWaitingRoom();
+                } else if (updated.status === 'started' || updated.status === 'finished') {
+                    if (activeWaitingRoom && activeWaitingRoom.roomCode === roomCode) {
+                        activeWaitingRoom = null;
+                        renderActiveWaitingRoom();
+                        closeModal('lobby-modal');
+                        if (updated.gameConfig) {
+                            initGame(updated.gameConfig);
+                        }
+                    }
+                    if (updated.liveGameState) {
+                        applyIncomingFirestoreRoomState(updated);
+                    }
                 }
             });
         }
@@ -7048,13 +7358,45 @@
 
         const p1 = { name: inv.fromName || 'Joueur 1', avatar: inv.fromAvatar || 'pooky', isAI: false, peerId: inv.fromPeerId };
         const p2 = { name: getCurrentUserDisplayName(), avatar: getCurrentUserAvatarKey(), isAI: false, peerId: getCurrentUserKey() };
-        initGame({
+        const duelRoomCode = inv.roomCode || 'DUEL01';
+        const duelConfig = {
             mode: 'room',
             gameId: 'duel_' + inviteId,
-            roomCode: inv.roomCode || 'DUEL01',
+            roomCode: duelRoomCode,
             roomName: `Duel : ${p1.name} vs ${p2.name}`,
             players: [p1, p2]
-        });
+        };
+        initGame(duelConfig);
+
+        if (window.ClubRealtimeSync) {
+            const initialSerialized = serializeGameStateForFirestoreRoom(gameState);
+            await window.ClubRealtimeSync.saveRoom(duelRoomCode, {
+                roomCode: duelRoomCode,
+                roomName: duelConfig.roomName,
+                visibility: 'private',
+                maxPlayers: 2,
+                hostPeerId: p1.peerId,
+                hostName: p1.name,
+                status: 'started',
+                players: initialSerialized.players,
+                currentTurn: 0,
+                currentPlayerIndex: 0,
+                currentTurnPeerId: p1.peerId,
+                currentTurnName: p1.name,
+                turnNumber: 1,
+                bag: initialSerialized.bag,
+                history: [],
+                lastPlayedCoords: [],
+                lastPlayedBy: null,
+                gameOver: false,
+                boardJson: initialSerialized.boardJson,
+                liveGameState: initialSerialized,
+                stateVersion: initialSerialized.stateVersion,
+                gameConfig: duelConfig,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            }).catch(() => {});
+        }
 
         const p1Av = document.getElementById('duel-p1-avatar');
         const p1Nm = document.getElementById('duel-p1-name');
