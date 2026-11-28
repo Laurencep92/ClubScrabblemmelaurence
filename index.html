@@ -1953,7 +1953,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, onSnapshot, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, onSnapshot, runTransaction, query, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // =========================================================================
         // CONFIGURATION FIREBASE POUR HÉBERGEMENT VERCEL & MULTI-APPAREILS
@@ -1992,6 +1992,7 @@
             unsubscribeContestedWords: null,
             unsubscribeClubImages: null,
             unsubscribeInvitations: null,
+            watchedInvitationsUid: null,
             presenceTimer: null,
             currentPresenceId: null,
 
@@ -2150,10 +2151,19 @@
 
             async sendGameInvitation(inviteObj) {
                 if (!inviteObj || !inviteObj.id) return false;
+                if (!inviteObj.targetUid || !inviteObj.senderUid || inviteObj.targetUid === inviteObj.senderUid) {
+                    return false;
+                }
                 const ok = await this.init();
                 if (!ok || !this.db) return false;
                 try {
-                    await setDoc(this.getInvitationRef(inviteObj.id), inviteObj);
+                    const payload = {
+                        ...inviteObj,
+                        targetUid: String(inviteObj.targetUid),
+                        senderUid: String(inviteObj.senderUid),
+                        status: inviteObj.status || 'pending'
+                    };
+                    await setDoc(this.getInvitationRef(payload.id), payload);
                     return true;
                 } catch (e) {
                     return false;
@@ -2172,14 +2182,37 @@
                 }
             },
 
-            startInvitationsListener() {
-                if (!this.db || this.unsubscribeInvitations) return;
-                this.unsubscribeInvitations = onSnapshot(this.getInvitationsColRef(), (snapshot) => {
+            startInvitationsListener(forceRestart = false) {
+                if (!this.db) return;
+                const activeUid = typeof window.getCurrentDuelUid === 'function' ? window.getCurrentDuelUid() : null;
+                if (!activeUid) return;
+
+                if (this.unsubscribeInvitations) {
+                    if (!forceRestart && this.watchedInvitationsUid === activeUid) return;
+                    this.unsubscribeInvitations();
+                    this.unsubscribeInvitations = null;
+                }
+
+                this.watchedInvitationsUid = activeUid;
+                const invitesQuery = query(
+                    this.getInvitationsColRef(),
+                    where('targetUid', '==', activeUid),
+                    where('status', '==', 'pending')
+                );
+
+                this.unsubscribeInvitations = onSnapshot(invitesQuery, (snapshot) => {
                     const now = Date.now();
                     const list = [];
                     snapshot.forEach(d => {
                         const val = d.data();
-                        if (val && val.id && (!val.createdAt || (now - val.createdAt) < 15 * 60 * 1000)) {
+                        if (
+                            val &&
+                            val.id &&
+                            val.targetUid === activeUid &&
+                            val.senderUid !== activeUid &&
+                            val.status === 'pending' &&
+                            (!val.createdAt || (now - val.createdAt) < 15 * 60 * 1000)
+                        ) {
                             list.push(val);
                         }
                     });
@@ -2203,501 +2236,10 @@
                 } catch (e) {
                     return false;
                 }
-            },
-
-            async clearAllClubImages() {
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    const snap = await getDocs(this.getClubImagesColRef());
-                    const tasks = [];
-                    snap.forEach(d => tasks.push(deleteDoc(d.ref)));
-                    await Promise.all(tasks);
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            startClubImagesListener() {
-                if (!this.db || this.unsubscribeClubImages) return;
-                this.unsubscribeClubImages = onSnapshot(this.getClubImagesColRef(), (snapshot) => {
-                    const map = {};
-                    snapshot.forEach(d => {
-                        const val = d.data();
-                        if (val && val.key && val.dataUrl) {
-                            map[val.key] = val.dataUrl;
-                        }
-                    });
-                    if (typeof window.mergeCloudClubImages === 'function') {
-                        window.mergeCloudClubImages(map);
-                    }
-                }, () => {});
-            },
-
-            async saveCustomOdsWord(entryObj) {
-                if (!entryObj || !entryObj.word) return false;
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    await setDoc(this.getCustomWordRef(entryObj.word), entryObj);
-                    await deleteDoc(this.getContestedWordRef(entryObj.word)).catch(() => {});
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            async saveContestedOdsWord(word) {
-                const clean = String(word || '').trim().toUpperCase().replace(/[^A-Z]/g, '');
-                if (!clean) return false;
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    await setDoc(this.getContestedWordRef(clean), { word: clean, contestedAt: Date.now() });
-                    await deleteDoc(this.getCustomWordRef(clean)).catch(() => {});
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            startCustomWordsListener() {
-                if (!this.db || this.unsubscribeCustomWords) return;
-                this.unsubscribeCustomWords = onSnapshot(this.getCustomWordsColRef(), (snapshot) => {
-                    const list = [];
-                    snapshot.forEach(d => {
-                        const val = d.data();
-                        if (val && val.word) list.push(val);
-                    });
-                    if (typeof window.mergeCloudCustomOdsWords === 'function') {
-                        window.mergeCloudCustomOdsWords(list);
-                    }
-                }, () => {});
-            },
-
-            startContestedWordsListener() {
-                if (!this.db || this.unsubscribeContestedWords) return;
-                this.unsubscribeContestedWords = onSnapshot(this.getContestedWordsColRef(), (snapshot) => {
-                    const list = [];
-                    snapshot.forEach(d => {
-                        const val = d.data();
-                        if (val && val.word) list.push(val.word);
-                    });
-                    if (typeof window.mergeCloudContestedOdsWords === 'function') {
-                        window.mergeCloudContestedOdsWords(list);
-                    }
-                }, () => {});
-            },
-
-            async saveMemberAccount(memberObj) {
-                if (!memberObj || !memberObj.username) return false;
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    await setDoc(this.getMemberRef(memberObj.username), {
-                        username: String(memberObj.username).trim(),
-                        avatar: String(memberObj.avatar || 'pooky'),
-                        password: String(memberObj.password || ''),
-                        secretQuestion: String(memberObj.secretQuestion || ''),
-                        secretAnswer: String(memberObj.secretAnswer || ''),
-                        updatedAt: Date.now()
-                    });
-                    return true;
-                } catch (e) {
-                    this.lastError = e?.code || e?.message || 'save_member_error';
-                    this.updateWarningBanner();
-                    return false;
-                }
-            },
-
-            async findMemberByUsername(rawUsername) {
-                const rawLower = String(rawUsername || '').trim().toLowerCase();
-                const key = rawLower
-                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                    .replace(/[^a-z0-9]/g, '');
-                if (!key && !rawLower) return null;
-
-                const ok = await this.init();
-                if (!ok || !this.db) {
-                    this.updateWarningBanner();
-                    return null;
-                }
-
-                const candidateAppIds = Array.from(new Set([
-                    this.appId,
-                    'club-scrabble-laurence',
-                    'default-app-id',
-                    'sitescrabblelaurence',
-                    'club-de-lettres-laurence'
-                ].filter(Boolean)));
-
-                const candidateDocRefs = [];
-                if (key) {
-                    candidateAppIds.forEach(aid => {
-                        candidateDocRefs.push(doc(this.db, 'artifacts', aid, 'public', 'data', 'club_members', key));
-                    });
-                    candidateDocRefs.push(doc(this.db, 'club_members', key));
-                    candidateDocRefs.push(doc(this.db, 'members', key));
-                    candidateDocRefs.push(doc(this.db, 'users', key));
-                }
-                if (rawLower && rawLower !== key) {
-                    candidateAppIds.forEach(aid => {
-                        candidateDocRefs.push(doc(this.db, 'artifacts', aid, 'public', 'data', 'club_members', rawLower));
-                    });
-                    candidateDocRefs.push(doc(this.db, 'club_members', rawLower));
-                }
-
-                let bestMatch = null;
-                let hadPermissionOrReadError = false;
-
-                const isMatchingMemberDoc = (docId, d) => {
-                    if (!d || typeof d !== 'object') return false;
-                    const docIdRaw = String(docId || '').trim().toLowerCase();
-                    const docIdNorm = docIdRaw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-                    const candidateNames = [d.username, d.pseudo, d.identifiant, d.name, d.displayName]
-                        .filter(Boolean)
-                        .map(v => String(v).trim().toLowerCase());
-                    return (
-                        (key && (docIdNorm === key || candidateNames.some(n => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '') === key))) ||
-                        (rawLower && (docIdRaw === rawLower || candidateNames.includes(rawLower)))
-                    );
-                };
-
-                const normalizeFoundMember = (docId, d) => ({
-                    ...d,
-                    username: String(d.username || d.pseudo || d.identifiant || d.name || docId).trim(),
-                    password: String(d.password || d.motDePasse || d.mdp || ''),
-                    avatar: String(d.avatar || d.avatarKey || 'pooky'),
-                    secretQuestion: String(d.secretQuestion || d.questionSecrete || ''),
-                    secretAnswer: String(d.secretAnswer || d.reponseSecrete || '')
-                });
-
-                for (const ref of candidateDocRefs) {
-                    try {
-                        const snap = await getDoc(ref);
-                        if (snap.exists()) {
-                            const normalized = normalizeFoundMember(snap.id, snap.data());
-                            if (!bestMatch || (normalized.updatedAt || 0) >= (bestMatch.updatedAt || 0)) {
-                                bestMatch = normalized;
-                            }
-                        }
-                    } catch (e) {
-                        this.lastError = e?.code || e?.message || 'find_member_doc_error';
-                        hadPermissionOrReadError = true;
-                    }
-                }
-
-                if (!bestMatch) {
-                    const candidateColRefs = [
-                        ...candidateAppIds.map(aid => collection(this.db, 'artifacts', aid, 'public', 'data', 'club_members')),
-                        collection(this.db, 'club_members'),
-                        collection(this.db, 'members'),
-                        collection(this.db, 'users')
-                    ];
-
-                    for (const colRef of candidateColRefs) {
-                        try {
-                            const snap = await getDocs(colRef);
-                            snap.forEach((docSnap) => {
-                                const d = docSnap.data();
-                                if (isMatchingMemberDoc(docSnap.id, d)) {
-                                    const normalized = normalizeFoundMember(docSnap.id, d);
-                                    if (!bestMatch || (normalized.updatedAt || 0) >= (bestMatch.updatedAt || 0)) {
-                                        bestMatch = normalized;
-                                    }
-                                }
-                            });
-                            if (bestMatch) break;
-                        } catch (e) {
-                            this.lastError = e?.code || e?.message || 'find_member_col_error';
-                            hadPermissionOrReadError = true;
-                        }
-                    }
-                }
-
-                if (hadPermissionOrReadError) {
-                    this.updateWarningBanner();
-                }
-
-                return bestMatch;
-            },
-
-            async deleteMemberAccount(username) {
-                if (!username) return false;
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    const candidateAppIds = Array.from(new Set([
-                        this.appId,
-                        'club-scrabble-laurence',
-                        'default-app-id',
-                        'sitescrabblelaurence'
-                    ].filter(Boolean)));
-                    const key = String(username).trim().toLowerCase()
-                        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                        .replace(/[^a-z0-9]/g, '');
-                    for (const aid of candidateAppIds) {
-                        try {
-                            await deleteDoc(doc(this.db, 'artifacts', aid, 'public', 'data', 'club_members', key));
-                        } catch (subErr) {}
-                    }
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            async syncAllMembersNow() {
-                const ok = await this.init();
-                if (!ok || !this.db) return [];
-                try {
-                    const candidateAppIds = Array.from(new Set([
-                        this.appId,
-                        'club-scrabble-laurence',
-                        'default-app-id',
-                        'sitescrabblelaurence',
-                        'club-de-lettres-laurence'
-                    ].filter(Boolean)));
-
-                    const candidateColRefs = [
-                        ...candidateAppIds.map(aid => collection(this.db, 'artifacts', aid, 'public', 'data', 'club_members')),
-                        collection(this.db, 'club_members'),
-                        collection(this.db, 'members'),
-                        collection(this.db, 'users')
-                    ];
-
-                    const cloudMembersMap = new Map();
-                    for (const colRef of candidateColRefs) {
-                        try {
-                            const snap = await getDocs(colRef);
-                            snap.forEach((docSnap) => {
-                                const d = docSnap.data();
-                                const uname = String(d?.username || d?.pseudo || d?.identifiant || d?.name || docSnap.id || '').trim();
-                                if (d && uname) {
-                                    const normalized = {
-                                        ...d,
-                                        username: uname,
-                                        password: String(d.password || d.motDePasse || d.mdp || ''),
-                                        avatar: String(d.avatar || d.avatarKey || 'pooky'),
-                                        secretQuestion: String(d.secretQuestion || d.questionSecrete || ''),
-                                        secretAnswer: String(d.secretAnswer || d.reponseSecrete || '')
-                                    };
-                                    const k = uname.toLowerCase();
-                                    const prev = cloudMembersMap.get(k);
-                                    if (!prev || (normalized.updatedAt || 0) >= (prev.updatedAt || 0)) {
-                                        cloudMembersMap.set(k, normalized);
-                                    }
-                                }
-                            });
-                        } catch (subErr) {}
-                    }
-
-                    try {
-                        const roomsSnap = await getDocs(this.getRoomsColRef());
-                        roomsSnap.forEach((docSnap) => {
-                            const r = docSnap.data();
-                            (r?.players || []).forEach(p => {
-                                if (p && !p.isAI && p.name && p.name !== 'Invité' && p.name !== 'Mme Laurence') {
-                                    const k = String(p.name).trim().toLowerCase();
-                                    if (!cloudMembersMap.has(k)) {
-                                        cloudMembersMap.set(k, {
-                                            username: p.name,
-                                            avatar: p.avatar || 'pooky',
-                                            updatedAt: r.updatedAt || 0
-                                        });
-                                    }
-                                }
-                            });
-                        });
-                    } catch (roomErr) {}
-
-                    const cloudMembers = Array.from(cloudMembersMap.values());
-                    if (typeof window.mergeCloudMembers === 'function') {
-                        window.mergeCloudMembers(cloudMembers);
-                    }
-                    return cloudMembers;
-                } catch (e) {
-                    this.lastError = e?.code || e?.message || 'fetch_members_error';
-                    this.updateWarningBanner();
-                    return [];
-                }
-            },
-
-            startMembersListener() {
-                if (!this.db || this.unsubscribeMembers) return;
-                this.unsubscribeMembers = onSnapshot(
-                    this.getMembersColRef(),
-                    (snapshot) => {
-                        const cloudMembers = [];
-                        snapshot.forEach((docSnap) => {
-                            const d = docSnap.data();
-                            if (d && d.username) cloudMembers.push(d);
-                        });
-                        if (typeof window.mergeCloudMembers === 'function') {
-                            window.mergeCloudMembers(cloudMembers);
-                        }
-                    },
-                    (err) => {
-                        this.lastError = err?.code || err?.message || 'listen_members_error';
-                        this.updateWarningBanner();
-                    }
-                );
-            },
-
-            async saveRecentGame(snapshotObj) {
-                if (!snapshotObj || !snapshotObj.id) return false;
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    const cleanDoc = {
-                        id: String(snapshotObj.id),
-                        title: String(snapshotObj.title || 'Partie du Club'),
-                        dateStr: String(snapshotObj.dateStr || ''),
-                        mode: String(snapshotObj.mode || 'solo'),
-                        ownerKey: String(snapshotObj.ownerKey || 'guest'),
-                        participantKeys: Array.isArray(snapshotObj.participantKeys) ? snapshotObj.participantKeys : [],
-                        currentPlayerIndex: Number(snapshotObj.currentPlayerIndex || 0),
-                        turnNumber: Number(snapshotObj.turnNumber || 1),
-                        gameOver: Boolean(snapshotObj.gameOver),
-                        startedAt: Number(snapshotObj.startedAt || Date.now()),
-                        updatedAt: Number(snapshotObj.updatedAt || Date.now()),
-                        syncedAt: Date.now(),
-                        playersSummary: Array.isArray(snapshotObj.players)
-                            ? snapshotObj.players.map(p => ({ name: p.name, avatar: p.avatar, score: p.score }))
-                            : [],
-                        stateJson: JSON.stringify(snapshotObj)
-                    };
-                    await setDoc(this.getGameRef(snapshotObj.id), cleanDoc);
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            async syncAllGamesNow() {
-                const ok = await this.init();
-                if (!ok || !this.db) return [];
-                try {
-                    const snap = await getDocs(this.getGamesColRef());
-                    const cloudGames = [];
-                    snap.forEach((docSnap) => {
-                        const d = docSnap.data();
-                        if (d && d.id) {
-                            if (d.stateJson) {
-                                try {
-                                    const parsed = JSON.parse(d.stateJson);
-                                    cloudGames.push({ ...parsed, updatedAt: d.updatedAt || parsed.updatedAt || Date.now() });
-                                } catch (e) {}
-                            } else {
-                                cloudGames.push(d);
-                            }
-                        }
-                    });
-                    if (typeof window.mergeCloudRecentGames === 'function') {
-                        window.mergeCloudRecentGames(cloudGames);
-                    }
-                    return cloudGames;
-                } catch (e) {
-                    return [];
-                }
-            },
-
-            startGamesListener() {
-                if (!this.db || this.unsubscribeGames) return;
-                this.unsubscribeGames = onSnapshot(
-                    this.getGamesColRef(),
-                    (snapshot) => {
-                        const cloudGames = [];
-                        snapshot.forEach((docSnap) => {
-                            const d = docSnap.data();
-                            if (d && d.id) {
-                                if (d.stateJson) {
-                                    try {
-                                        const parsed = JSON.parse(d.stateJson);
-                                        cloudGames.push({ ...parsed, updatedAt: d.updatedAt || parsed.updatedAt || Date.now() });
-                                    } catch (e) {}
-                                } else {
-                                    cloudGames.push(d);
-                                }
-                            }
-                        });
-                        if (typeof window.mergeCloudRecentGames === 'function') {
-                            window.mergeCloudRecentGames(cloudGames);
-                        }
-                    },
-                    () => {}
-                );
-            },
-
-            getMemberSavesRef(ownerKey) {
-                const cleanKey = String(ownerKey || 'guest').replace(/[^a-zA-Z0-9_-]/g, '_');
-                return doc(this.db, 'artifacts', this.appId, 'public', 'data', 'member_manual_saves', cleanKey);
-            },
-
-            async saveMemberManualSlots(ownerKey, slotsArray) {
-                if (!ownerKey || ownerKey === 'guest') return false;
-                const ok = await this.init();
-                if (!ok || !this.db) return false;
-                try {
-                    await setDoc(this.getMemberSavesRef(ownerKey), {
-                        ownerKey: String(ownerKey),
-                        slotsJson: JSON.stringify(slotsArray || []),
-                        updatedAt: Date.now()
-                    });
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            async loadMemberManualSlots(ownerKey) {
-                if (!ownerKey || ownerKey === 'guest') return null;
-                const ok = await this.init();
-                if (!ok || !this.db) return null;
-                try {
-                    const snap = await getDoc(this.getMemberSavesRef(ownerKey));
-                    if (!snap.exists()) return null;
-                    const data = snap.data();
-                    if (data && data.slotsJson) {
-                        return JSON.parse(data.slotsJson);
-                    }
-                    return null;
-                } catch (e) {
-                    return null;
-                }
-            },
-
-            startAllRoomsListener() {
-                if (!this.db || this.unsubscribeAllRooms) return;
-                this.unsubscribeAllRooms = onSnapshot(
-                    this.getRoomsColRef(),
-                    (snapshot) => {
-                        const rooms = [];
-                        snapshot.forEach((docSnap) => {
-                            const d = docSnap.data();
-                            if (d && d.roomCode) rooms.push(d);
-                        });
-                        if (typeof window.handleAllRoomsSnapshot === 'function') {
-                            window.handleAllRoomsSnapshot(rooms);
-                        }
-                    },
-                    () => {}
-                );
-            },
-
-            async upsertPresence(playerData) {
-                if (!playerData || !playerData.playerId) return false;
-                this.currentPresenceId = playerData.playerId;
-                const ok = await this.init();
-                if (!ok || !this.db) {
-                    if (typeof window.renderOnlinePlayersList === 'function') {
-                        window.renderOnlinePlayersList([]);
-                    }
-                    return false;
-                }
+                const currentUid = typeof window.getCurrentDuelUid === 'function' ? window.getCurrentDuelUid() : String(playerData.playerId);
                 const payload = {
                     playerId: String(playerData.playerId),
+                    uid: String(currentUid),
                     name: String(playerData.name || 'Invité'),
                     avatarKey: String(playerData.avatarKey || 'pooky'),
                     status: String(playerData.status || 'Dans le hall'),
@@ -5675,6 +5217,45 @@
     let onlinePlayersCache = [];
     let pendingDuelTarget = null;
     let incomingInvitesCache = [];
+    const notifiedDuelInviteIds = new Set();
+    const dismissedDuelInviteIds = new Set();
+
+    function getCurrentDuelUid() {
+        if (isAdminLoggedIn) return 'admin_mmelaurence';
+        if (currentMember && currentMember.username) {
+            return 'member_' + normalizeMemberLoginKey(currentMember.username);
+        }
+        return CLIENT_PEER_ID;
+    }
+    window.getCurrentDuelUid = getCurrentDuelUid;
+
+    function playDuelNotificationChime() {
+        if (!soundEnabled) return;
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            const ctx = new AudioCtx();
+            if (ctx.state === 'suspended') {
+                ctx.resume().catch(() => {});
+            }
+            const notes = [659.25, 987.77]; // Mi5 -> Si5 (deux notes cristallines ascendantes)
+            notes.forEach((freq, idx) => {
+                const startTime = ctx.currentTime + idx * 0.14;
+                const duration = 0.28;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, startTime);
+                gain.gain.setValueAtTime(0.001, startTime);
+                gain.gain.exponentialRampToValueAtTime(0.16, startTime + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(startTime);
+                osc.stop(startTime + duration + 0.02);
+            });
+        } catch (e) {}
+    }
 
     window.openLobbyModal = function() {
         renderPublicRoomsList();
@@ -5924,10 +5505,12 @@
 
         const listToRender = onlinePlayersCache.length > 0
             ? onlinePlayersCache
-            : [{ playerId: CLIENT_PEER_ID, name: getCurrentUserDisplayName(), avatarKey: getCurrentUserAvatarKey(), status: 'Au salon' }];
+            : [{ playerId: CLIENT_PEER_ID, uid: getCurrentDuelUid(), name: getCurrentUserDisplayName(), avatarKey: getCurrentUserAvatarKey(), status: 'Au salon' }];
 
+        const myUid = getCurrentDuelUid();
         const html = listToRender.map(p => {
-            const isSelf = p.playerId === CLIENT_PEER_ID || p.name === getCurrentUserDisplayName();
+            const targetUid = String(p.uid || p.playerId || '');
+            const isSelf = p.playerId === CLIENT_PEER_ID || targetUid === myUid || p.name === getCurrentUserDisplayName();
             return `
                 <div class="p-2 rounded-xl bg-white border border-linDark flex items-center justify-between gap-2">
                     <div class="flex items-center gap-2 min-w-0">
@@ -5937,7 +5520,7 @@
                             <p class="text-[10px] text-saugeDark truncate">${p.status || 'En ligne'}</p>
                         </div>
                     </div>
-                    ${!isSelf ? `<button type="button" onclick="openDuelInviteModal('${p.playerId}', '${String(p.name).replace(/'/g, "\\'")}', '${p.avatarKey || 'pooky'}')" class="px-2 py-1 rounded-lg bg-terracotta text-white text-[10px] font-bold shrink-0">⚔️ Duel</button>` : ''}
+                    ${!isSelf && targetUid ? `<button type="button" onclick="openDuelInviteModal('${targetUid.replace(/'/g, "\\'")}', '${String(p.name).replace(/'/g, "\\'")}', '${p.avatarKey || 'pooky'}')" class="px-2 py-1 rounded-lg bg-terracotta text-white text-[10px] font-bold shrink-0">⚔️ Duel</button>` : ''}
                 </div>
             `;
         }).join('');
@@ -5949,28 +5532,40 @@
     window.openDuelPlayerPickerModal = function() {
         const listEl = document.getElementById('duel-picker-online-list');
         if (listEl) {
-            const others = onlinePlayersCache.filter(p => p.playerId !== CLIENT_PEER_ID && p.name !== getCurrentUserDisplayName());
+            const myUid = getCurrentDuelUid();
+            const others = onlinePlayersCache.filter(p => {
+                const targetUid = String(p.uid || p.playerId || '');
+                return targetUid && p.playerId !== CLIENT_PEER_ID && targetUid !== myUid && p.name !== getCurrentUserDisplayName();
+            });
             if (others.length === 0) {
                 listEl.innerHTML = `<p class="text-center text-bois/75 italic py-4">Aucun autre joueur connecté en ce moment. Ouvrez un salon ou jouez contre un compagnon !</p>`;
             } else {
-                listEl.innerHTML = others.map(p => `
-                    <div class="p-2.5 rounded-2xl bg-white border border-linDark flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2.5 min-w-0">
-                            <div class="w-9 h-9 rounded-xl overflow-hidden border border-bois/20 shrink-0">${getAvatarHTML(p.avatarKey)}</div>
-                            <span class="font-serif font-bold text-sm text-boisDark truncate">${p.name}</span>
+                listEl.innerHTML = others.map(p => {
+                    const targetUid = String(p.uid || p.playerId || '');
+                    return `
+                        <div class="p-2.5 rounded-2xl bg-white border border-linDark flex items-center justify-between gap-2">
+                            <div class="flex items-center gap-2.5 min-w-0">
+                                <div class="w-9 h-9 rounded-xl overflow-hidden border border-bois/20 shrink-0">${getAvatarHTML(p.avatarKey)}</div>
+                                <span class="font-serif font-bold text-sm text-boisDark truncate">${p.name}</span>
+                            </div>
+                            <button type="button" onclick="closeModal('duel-picker-modal'); openDuelInviteModal('${targetUid.replace(/'/g, "\\'")}', '${String(p.name).replace(/'/g, "\\'")}', '${p.avatarKey || 'pooky'}')" class="px-3 py-1.5 rounded-xl bg-terracotta text-white text-xs font-bold shrink-0">
+                                ⚔️ Défier
+                            </button>
                         </div>
-                        <button type="button" onclick="closeModal('duel-picker-modal'); openDuelInviteModal('${p.playerId}', '${String(p.name).replace(/'/g, "\\'")}', '${p.avatarKey || 'pooky'}')" class="px-3 py-1.5 rounded-xl bg-terracotta text-white text-xs font-bold shrink-0">
-                            ⚔️ Défier
-                        </button>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             }
         }
         openModal('duel-picker-modal');
     };
 
-    window.openDuelInviteModal = function(targetId, targetName, targetAvatar) {
-        pendingDuelTarget = { targetId, targetName, targetAvatar };
+    window.openDuelInviteModal = function(targetUid, targetName, targetAvatar) {
+        if (!targetUid || targetUid === getCurrentDuelUid()) {
+            showToast('Veuillez choisir un adversaire valide connecté au Club.', 'error');
+            openDuelPlayerPickerModal();
+            return;
+        }
+        pendingDuelTarget = { targetUid: String(targetUid), targetName, targetAvatar };
         const sAvatar = document.getElementById('duel-inv-sender-avatar');
         const sName = document.getElementById('duel-inv-sender-name');
         const tAvatar = document.getElementById('duel-inv-target-avatar');
@@ -5988,7 +5583,17 @@
     };
 
     window.confirmSendDuelInvitation = async function() {
-        if (!pendingDuelTarget || !window.ClubRealtimeSync) return;
+        const senderUid = getCurrentDuelUid();
+        if (!pendingDuelTarget || !pendingDuelTarget.targetUid) {
+            showToast('Veuillez sélectionner un adversaire précis avant d’envoyer un duel.', 'error');
+            closeDuelInviteModal();
+            openDuelPlayerPickerModal();
+            return;
+        }
+        if (pendingDuelTarget.targetUid === senderUid || !window.ClubRealtimeSync) {
+            showToast('Impossible d’envoyer une invitation en duel à vous-même.', 'error');
+            return;
+        }
         const roomCode = 'DUEL' + Math.floor(10 + Math.random() * 89);
         const roomData = {
             roomCode,
@@ -5996,9 +5601,12 @@
             isPrivate: true,
             maxPlayers: 2,
             hostPeerId: CLIENT_PEER_ID,
+            senderUid,
+            targetUid: String(pendingDuelTarget.targetUid),
             status: 'waiting',
             players: [{
                 peerId: CLIENT_PEER_ID,
+                uid: senderUid,
                 name: getCurrentUserDisplayName(),
                 avatar: getCurrentUserAvatarKey(),
                 isAI: false
@@ -6018,25 +5626,48 @@
         });
 
         await window.ClubRealtimeSync.sendGameInvitation({
-            id: 'inv_' + Date.now(),
+            id: 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            senderUid,
+            targetUid: String(pendingDuelTarget.targetUid),
+            status: 'pending',
             fromPeerId: CLIENT_PEER_ID,
             fromName: getCurrentUserDisplayName(),
             fromAvatar: getCurrentUserAvatarKey(),
-            toPeerId: pendingDuelTarget.targetId,
+            toPeerId: String(pendingDuelTarget.targetUid),
             toName: pendingDuelTarget.targetName,
             roomCode,
             createdAt: Date.now()
         });
 
+        const invitedName = pendingDuelTarget.targetName;
         closeDuelInviteModal();
-        showToast(`Invitation envoyée à ${pendingDuelTarget.targetName} !`, 'success');
+        showToast(`Invitation envoyée à ${invitedName} !`, 'success');
     };
 
     window.handleIncomingInvitationsSnapshot = function(list) {
-        const myName = getCurrentUserDisplayName();
-        incomingInvitesCache = (list || []).filter(inv =>
-            inv.toPeerId === CLIENT_PEER_ID || (inv.toName && inv.toName === myName && inv.fromPeerId !== CLIENT_PEER_ID)
-        );
+        const myUid = getCurrentDuelUid();
+        if (!myUid) return;
+
+        // Vérification stricte de sécurité : seul le destinataire exact voit l'invitation
+        incomingInvitesCache = (list || []).filter(invite => {
+            if (!invite || !invite.id) return false;
+            if (invite.targetUid !== myUid || invite.senderUid === myUid) return false;
+            if (invite.status && invite.status !== 'pending') return false;
+            return true;
+        });
+
+        // Déclencher le carillon doux uniquement lors de la toute première réception d'une invitation valide
+        let hasNewUnseenInvite = false;
+        incomingInvitesCache.forEach(inv => {
+            if (!notifiedDuelInviteIds.has(inv.id)) {
+                notifiedDuelInviteIds.add(inv.id);
+                hasNewUnseenInvite = true;
+            }
+        });
+        if (hasNewUnseenInvite) {
+            playDuelNotificationChime();
+        }
+
         const badge = document.getElementById('invite-bell-badge');
         if (badge) {
             badge.textContent = String(incomingInvitesCache.length);
@@ -6058,10 +5689,47 @@
                 `).join('');
             }
         }
+
+        // Afficher la carte flottante d'invitation uniquement chez le destinataire concerné
+        const banner = document.getElementById('incoming-invite-banner');
+        const visibleBannerInvites = incomingInvitesCache.filter(inv => !dismissedDuelInviteIds.has(inv.id));
+        if (banner) {
+            if (visibleBannerInvites.length === 0) {
+                banner.classList.add('hidden');
+            } else {
+                const latest = visibleBannerInvites[0];
+                const avatarEl = document.getElementById('incoming-invite-avatar');
+                const titleEl = document.getElementById('incoming-invite-title');
+                const subEl = document.getElementById('incoming-invite-sub');
+                const listEl = document.getElementById('incoming-invite-list');
+
+                if (avatarEl) avatarEl.innerHTML = getAvatarHTML(latest.fromAvatar || 'pooky');
+                if (titleEl) titleEl.textContent = `${latest.fromName} vous défie en duel !`;
+                if (subEl) subEl.textContent = `Salon privé ${latest.roomCode} • Partie à 2 joueurs`;
+                if (listEl) {
+                    listEl.innerHTML = visibleBannerInvites.map(inv => `
+                        <div class="flex items-center justify-between gap-2 pt-1">
+                            <span class="text-[11px] font-bold text-boisDark truncate">${inv.fromName} (${inv.roomCode})</span>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <button type="button" onclick="acceptDuelInvitation('${inv.id}', '${inv.roomCode}')" class="px-2.5 py-1 rounded-lg bg-sauge hover:bg-saugeDark text-white text-[11px] font-bold shadow-sm transition">
+                                    Accepter
+                                </button>
+                                <button type="button" onclick="declineDuelInvitation('${inv.id}')" class="px-2 py-1 rounded-lg bg-lin hover:bg-linDark text-boisDark text-[11px] font-bold transition">
+                                    Refuser
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                banner.classList.remove('hidden');
+            }
+        }
     };
 
     window.acceptDuelInvitation = async function(inviteId, roomCode) {
         if (!window.ClubRealtimeSync) return;
+        dismissedDuelInviteIds.add(inviteId);
+        dismissIncomingInviteBanner();
         await window.ClubRealtimeSync.removeGameInvitation(inviteId);
         await joinPrivateRoomByCodeDirect(roomCode);
     };
@@ -6082,6 +5750,8 @@
     }
 
     window.declineDuelInvitation = async function(inviteId) {
+        dismissedDuelInviteIds.add(inviteId);
+        dismissIncomingInviteBanner();
         if (window.ClubRealtimeSync) {
             await window.ClubRealtimeSync.removeGameInvitation(inviteId);
         }
@@ -6107,37 +5777,58 @@
         if (!window.ClubRealtimeSync) return;
         window.ClubRealtimeSync.startPresenceTracking(() => ({
             playerId: CLIENT_PEER_ID,
+            uid: getCurrentDuelUid(),
             name: getCurrentUserDisplayName(),
             avatarKey: getCurrentUserAvatarKey(),
             status: gameState.roomCode ? `Salon ${gameState.roomCode}` : 'Au Club'
         }));
+        if (typeof window.ClubRealtimeSync.startInvitationsListener === 'function') {
+            window.ClubRealtimeSync.startInvitationsListener(true);
+        }
     }
 
-    // =========================================================================
-    // ESPACE MEMBRE, INSCRIPTION, CONNEXION & TABLEAU DE BORD ADMIN
-    // =========================================================================
     let regStep = 1;
     let regSelectedAvatar = 'pooky';
     let regSelectedUsername = '';
 
     function updateHeaderAccountUI() {
-        const label = document.getElementById('account-label');
-        const miniAvatar = document.getElementById('account-avatar-mini');
-        const adminHeaderBtn = document.getElementById('admin-header-btn');
-        const portrait = document.getElementById('connected-user-portrait');
-        const badge = document.getElementById('connected-user-badge');
-        const nameEl = document.getElementById('connected-user-name');
-
         const displayName = getCurrentUserDisplayName();
         const avatarKey = getCurrentUserAvatarKey();
+        const avatarHtml = getAvatarHTML(avatarKey);
 
-        if (label) label.textContent = displayName;
-        if (miniAvatar) miniAvatar.innerHTML = getAvatarHTML(avatarKey);
+        const miniAvatar = document.getElementById('account-avatar-mini');
+        const accountLabel = document.getElementById('account-label');
+        const adminHeaderBtn = document.getElementById('admin-header-btn');
+        const userPortrait = document.getElementById('connected-user-portrait');
+        const userBadge = document.getElementById('connected-user-badge');
+        const userName = document.getElementById('connected-user-name');
+        const userSub = document.getElementById('connected-user-subtitle');
+
+        if (miniAvatar) miniAvatar.innerHTML = avatarHtml;
+        if (accountLabel) accountLabel.textContent = displayName;
         if (adminHeaderBtn) adminHeaderBtn.classList.toggle('hidden', !isAdminLoggedIn);
-        if (portrait) portrait.innerHTML = getAvatarHTML(avatarKey);
-        if (nameEl) nameEl.textContent = displayName;
-        if (badge) {
-            badge.textContent = isAdminLoggedIn ? 'Administratrice' : (currentMember ? 'Membre du Club' : 'Mode Invité');
+
+        if (userPortrait) userPortrait.innerHTML = avatarHtml;
+        if (userName) userName.textContent = displayName;
+
+        if (isAdminLoggedIn) {
+            if (userBadge) {
+                userBadge.textContent = 'Administratrice';
+                userBadge.className = 'inline-block max-w-full truncate whitespace-nowrap px-2 py-0.5 rounded-full bg-ocre/25 text-boisDark text-[10px] font-bold uppercase tracking-tight';
+            }
+            if (userSub) userSub.textContent = 'Direction du Club de lettres';
+        } else if (currentMember) {
+            if (userBadge) {
+                userBadge.textContent = 'Membre du Club';
+                userBadge.className = 'inline-block max-w-full truncate whitespace-nowrap px-2 py-0.5 rounded-full bg-sauge/20 text-saugeDark text-[10px] font-bold uppercase tracking-tight';
+            }
+            if (userSub) userSub.textContent = 'Profil synchronisé';
+        } else {
+            if (userBadge) {
+                userBadge.textContent = 'Mode Invité';
+                userBadge.className = 'inline-block max-w-full truncate whitespace-nowrap px-2 py-0.5 rounded-full bg-ardoise/15 text-ardoise text-[10px] font-bold uppercase tracking-tight';
+            }
+            if (userSub) userSub.textContent = 'Session active au salon';
         }
     }
 
